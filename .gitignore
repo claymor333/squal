@@ -21,3 +21,7 @@ Thumbs.db
 # Local config (contains credentials)
 config.json
 .squal/
+
+# Superpowers workflow config (local, not committed)
+.agents/skills/superpowers-*/
+.superpowers/
