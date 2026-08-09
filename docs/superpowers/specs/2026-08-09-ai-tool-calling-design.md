@@ -50,9 +50,10 @@ Errors as data: failed `run_query`/`run_write` returns the DB error string as th
 
 ## File ownership (parallel groups)
 
-- **Group 1 [PARALLEL]:** AI-1 client+detection, AI-2 tools/registry+summary, AI-5 session+turns persistence
-- **Group 2 [SEQUENTIAL]:** AI-3 agent loop (consumes AI-1/AI-2, defines transport interface)
-- **Group 3 [SEQUENTIAL]:** AI-4 text fallback transport (implements AI-3's interface)
-- **Group 4 [SEQUENTIAL]:** AI-6 panel + model.go wiring (must follow main-plan B6 on model.go)
+- **Group 1 [SEQUENTIAL]:** **AI-1 client+detection lands first** — AI-2 and AI-5 depend on its `Client`/`Message`/`ToolDef` types and cannot compile until it merges.
+- **Group 2 [PARALLEL]:** AI-2 tools/registry+summary, AI-5 session+turns persistence — both consume AI-1's types but are mutually independent.
+- **Group 3 [SEQUENTIAL]:** AI-3 agent loop (consumes AI-1/AI-2/AI-5, defines transport interface)
+- **Group 4 [SEQUENTIAL]:** AI-4 text fallback transport (implements AI-3's interface)
+- **Group 5 [SEQUENTIAL]:** AI-6 panel + model.go wiring (must follow main-plan B6 on model.go)
 
 Prereqs from main plan: E1 (actions store), E2 (Classify/UndoVerdict), E3 (RowEditor), B3 (Fetch/Columnar) must be landed first.
