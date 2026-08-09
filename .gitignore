@@ -1,0 +1,23 @@
+# Build artifacts
+/squal
+/bin/
+/dist/
+
+# Go
+*.test
+*.out
+go.work
+go.work.sum
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config (contains credentials)
+config.json
+.squal/
