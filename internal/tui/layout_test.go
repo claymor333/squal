@@ -23,23 +23,25 @@ func TestLayoutFocusExpands(t *testing.T) {
 	l := newLayout()
 	idle := l.rects(120, 40, focusResults, false, false).schema
 	focused := l.rects(120, 40, focusSchema, false, false).schema
-	if focused.H <= idle.H {
-		t.Fatalf("focused schema should be taller: idle=%d focus=%d", idle.H, focused.H)
+	if focused.W <= idle.W {
+		t.Fatalf("focused schema should be wider: idle=%d focus=%d", idle.W, focused.W)
 	}
 }
 
 func TestLayoutRowPanelTakesRightThird(t *testing.T) {
 	l := newLayout()
 	rs := l.rects(120, 40, focusResults, true, false)
-	if rs.row.W != 40 {
-		t.Fatalf("row panel width = %d, want 40", rs.row.W)
+	// rightW = 120 - schemaW(26) = 94; row = 94/3
+	if rs.row.W != 31 {
+		t.Fatalf("row panel width = %d, want 31", rs.row.W)
 	}
 	if rs.row.X+rs.row.W > 120 {
 		t.Fatalf("row panel escapes the window: %+v", rs.row)
 	}
-	// editor/results shrink to make room on the left
-	if rs.editor.W != 80 || rs.results.W != 80 {
-		t.Fatalf("left panes not shrunk: editor.W=%d results.W=%d", rs.editor.W, rs.results.W)
+	// editor/results/ai shrink to make room for the row strip
+	if rs.editor.W != 94-31 || rs.results.W != 94-31 || rs.ai.W != 94-31 {
+		t.Fatalf("right panes not shrunk: editor.W=%d results.W=%d ai.W=%d",
+			rs.editor.W, rs.results.W, rs.ai.W)
 	}
 }
 

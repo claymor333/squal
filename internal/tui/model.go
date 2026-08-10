@@ -1049,7 +1049,7 @@ func (m *model) View() string {
 		cur.pane.SetLines(rs.schema.H - 3) // title + borders
 		schemaBody = cur.pane.view()
 	}
-	out.WriteString(paneBox("schema", m.focus == focusSchema, schemaBody, rs.schema.W, rs.schema.H))
+	schemaBox := paneBox("schema", m.focus == focusSchema, schemaBody, rs.schema.W, rs.schema.H)
 
 	editorBody := styleDim.Render("(empty)")
 	if cur.ed != nil {
@@ -1061,27 +1061,26 @@ func (m *model) View() string {
 		cur.results.SetViewport(rs.results.H - 4) // title + borders + column header
 		resultsBody = cur.results.view(rs.results.W - 2)
 	}
-
-	if cur.row != nil {
-		edBox := paneBox("editor", m.focus == focusEditor, editorBody, rs.editor.W, rs.editor.H)
-		resBox := paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H)
-		rowBox := paneBox("row", m.focus == focusRow, cur.row.view(), rs.row.W, rs.row.H)
-		left := lipgloss.JoinVertical(lipgloss.Left, edBox, resBox)
-		out.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, rowBox))
-	} else {
-		out.WriteString(paneBox("editor", m.focus == focusEditor, editorBody, rs.editor.W, rs.editor.H))
-		out.WriteString(paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H))
-	}
-
-	if cur.hist != nil {
-		out.WriteString(paneBox("history", m.focus == focusHistory, cur.hist.view(), rs.hist.W, rs.hist.H))
-	}
-
 	aiBody := renderAI(m.ai)
 	if m.ai != nil {
 		m.ai.SetLines(rs.ai.H - 3)
 	}
-	out.WriteString(paneBox("ai", m.focus == focusAI, aiBody, rs.ai.W, rs.ai.H))
+
+	// Right column: editor, results, [history], ai stacked, with the row panel
+	// as a right-hand strip when open.
+	var right []string
+	right = append(right, paneBox("editor", m.focus == focusEditor, editorBody, rs.editor.W, rs.editor.H))
+	right = append(right, paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H))
+	if cur.hist != nil {
+		right = append(right, paneBox("history", m.focus == focusHistory, cur.hist.view(), rs.hist.W, rs.hist.H))
+	}
+	right = append(right, paneBox("ai", m.focus == focusAI, aiBody, rs.ai.W, rs.ai.H))
+
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, right...)
+	if cur.row != nil {
+		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, rightCol, paneBox("row", m.focus == focusRow, cur.row.view(), rs.row.W, rs.row.H))
+	}
+	out.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, schemaBox, rightCol))
 
 	var elapsed string
 	if cur.results != nil && cur.job != nil {

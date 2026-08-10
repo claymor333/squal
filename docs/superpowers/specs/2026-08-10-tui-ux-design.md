@@ -43,38 +43,36 @@ Scope is: make the app not-broken, then make it feel like a tool. Structural cod
 ## Layout v2
 
 Given `(w, h)` from `tea.WindowSizeMsg`, a new pure `layout` type computes a rect
-per surface. Every line is accounted for; nothing renders past `h`.
+per surface. Every line is accounted for; nothing renders past `h`. The body is
+**horizontal**: the schema tree is a left column, and the editor, results,
+history, and AI panes stack in a right column — the classic DB-tool arrangement.
 
 ```
-┌ tabs (1 line) ────────────────────────────────────────────┐
-├ schema ─────────────────────┬─────────────────────────────┤
-│ (scrollable tree,           │                             │
-│  weight grows when focused) │   row panel (right column,  │
-├ editor ─────────────────────┤   only while open, SPEC §5): │
-│ 1 line idle → N lines when  │   field inputs styled as    │
-│ focused, multiline          │   JSON, raw-JSON toggle     │
-├ results ────────────────────┤                             │
-│ viewport = remaining height │   occupies right column of  │
-│ floor 8, keyset next page   │   the editor+results region │
-├ ai (1..~6 lines) ───────────┤                             │
-├ status (1 line) ────────────┴─────────────────────────────┤
+┌ tabs (1 line) ───────────────────────────────────────────────────────────┐
+├ schema ────────┬─ editor ───────────────────────────────────┬────────────┤
+│ (left column,  │ 1 line idle → N lines when focused         │            │
+│  wider when    ├─ results ───────────────────────────────────┤  row panel │
+│  focused)      │ viewport = remaining height, floor 8       │  (right    │
+│                ├─ history (only while `u` is open) ─────────┤   strip,   │
+│                ├─ ai (1..~6 lines) ─────────────────────────┤  SPEC §5)  │
+├ status (1 line)─────────────────────────────────────────────┴────────────┤
 ```
 
 Rules:
 
-- **Tabs** = row 0, **status** = last row. Body = `h - 2` rows split top-to-bottom.
-- **Weights** (when not focused / focused): schema 30/45%, editor 1 line/`min(8, body/3)`,
-  results remainder (floor 8), ai 1 line/`min(6, body/4)`. Focused pane expands, idle
-  panes collapse — never zero, always ≥ their floor.
-- **Schema scrolls internally.** `schemaPane` gains a `top` offset and renders a
-  viewport of the tree. A 500-table schema no longer affects other panes.
+- **Tabs** = row 0, **status** = last row. Body = `h - 2` rows.
+- **Schema** is the left column, `22%` of the width (32% when focused), full body
+  height. It **scrolls internally**: `schemaPane` has a `top` offset and renders a
+  viewport, so a 500-table schema never affects other panes.
+- **Right column** splits vertically by focus weight: editor `1` line idle →
+  `min(8, body/3)` focused; ai `1` → `min(6, body/4)`; results take the
+  remainder (floor 8, degrading to 1 in tiny windows).
 - **Results viewport** = computed lines, replacing the `resultsViewport = 8` const
-  (`model.go:592`). Floor 8, degrading to 1 when the window is too short to fit every
-  pane (tabs + status always win; nothing collapses below one line). Cell width =
-  `(w - borders) / ncols`, replacing the hardcoded 24-char `truncate` (`model.go:808`).
-- **Row panel** is a right-hand column of the editor+results region, `w/3` wide,
-  present only while open. Focus can move into it (`tab` cycle includes it when
-  open).
+  (`model.go:592`). Cell width = `(w - borders) / ncols`, replacing the hardcoded
+  24-char `truncate` (`model.go:808`).
+- **Row panel** is a right-hand strip of the right column, `rightW/3` wide,
+  spanning the column's full height, present only while open. Focus can move into
+  it (`tab` cycle includes it when open).
 - Panes expose small `SetViewport(...)`/`SetLines(...)` setters the model calls
   each frame from the layout; their bodies stay pure and unit-testable.
 

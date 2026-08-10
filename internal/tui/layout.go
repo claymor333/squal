@@ -54,11 +54,13 @@ func lineCount(s string) int {
 
 // rects computes pane bounds for a w×h window with the given focus, whether the
 // row panel is open, and whether the history panel is open. Row 0 is the tab
-// bar, the last row is the status bar, and the body between them is split by
-// focus weights. Every pane keeps at least one body row so a tiny window never
-// collapses a surface; the results floor of 8 degrades to whatever space
-// remains when the window is too short. The history panel carves a third out of
-// the results band when open.
+// bar and the last row is the status bar. The body between them is horizontal:
+// the schema tree is a left column (wider when focused), and the editor,
+// results, history, and AI panes stack in the right column. Every pane keeps at
+// least one body row so a tiny window never collapses a surface; the results
+// floor of 8 degrades to whatever space remains. The history panel carves a
+// third out of the results band when open; the row panel is a right-hand strip
+// of the whole right column.
 func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects {
 	if w < 1 {
 		w = 1
@@ -68,12 +70,15 @@ func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects 
 	}
 	bodyH := h - 2
 
-	schemaH := bodyH * 30 / 100
+	schemaW := w * 22 / 100
 	if focus == focusSchema {
-		schemaH = bodyH * 45 / 100
+		schemaW = w * 32 / 100
 	}
-	if schemaH < 1 {
-		schemaH = 1
+	if schemaW < 20 {
+		schemaW = 20
+	}
+	if schemaW > w/2 {
+		schemaW = w / 2
 	}
 
 	edH := 1
@@ -98,21 +103,10 @@ func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects 
 		}
 	}
 
-	resH := bodyH - schemaH - edH - aiH
+	resH := bodyH - edH - aiH
 	if resH < 1 {
 		resH = 1
 	}
-
-	top := 1
-	rs := rects{
-		tabs:   rect{X: 0, Y: 0, W: w, H: 1},
-		status: rect{X: 0, Y: h - 1, W: w, H: 1},
-	}
-	rs.schema = rect{X: 0, Y: top, W: w, H: schemaH}
-	top += schemaH
-	rs.editor = rect{X: 0, Y: top, W: w, H: edH}
-	top += edH
-
 	histH := 0
 	if histOpen {
 		histH = resH / 3
@@ -123,26 +117,43 @@ func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects 
 			histH = 0
 		}
 	}
-	rs.results = rect{X: 0, Y: top, W: w, H: resH - histH}
-	top += rs.results.H
+	resH -= histH
+	if resH < 1 {
+		resH = 1
+	}
+
+	rightX := schemaW
+	rightW := w - schemaW
+
+	rs := rects{
+		tabs:   rect{X: 0, Y: 0, W: w, H: 1},
+		status: rect{X: 0, Y: h - 1, W: w, H: 1},
+		schema: rect{X: 0, Y: 1, W: schemaW, H: bodyH},
+	}
+	top := 1
+	rs.editor = rect{X: rightX, Y: top, W: rightW, H: edH}
+	top += edH
+	rs.results = rect{X: rightX, Y: top, W: rightW, H: resH}
+	top += resH
 	if histH > 0 {
-		rs.hist = rect{X: 0, Y: top, W: w, H: histH}
+		rs.hist = rect{X: rightX, Y: top, W: rightW, H: histH}
 		top += histH
 	}
-	rs.ai = rect{X: 0, Y: top, W: w, H: aiH}
+	rs.ai = rect{X: rightX, Y: top, W: rightW, H: aiH}
 
 	if rowOpen {
-		rw := w / 3
+		rw := rightW / 3
 		if rw < 15 {
 			rw = 15
 		}
-		if rw > w-1 {
-			rw = w - 1
+		if rw > rightW-1 {
+			rw = rightW - 1
 		}
-		rs.row = rect{X: w - rw, Y: rs.editor.Y, W: rw, H: rs.editor.H + rs.results.H}
-		rs.editor.W = w - rw
-		rs.results.W = w - rw
-		rs.hist.W = w - rw
+		rs.row = rect{X: rightX + rightW - rw, Y: rs.editor.Y, W: rw, H: bodyH - rs.editor.Y + 1}
+		rs.editor.W = rightW - rw
+		rs.results.W = rightW - rw
+		rs.hist.W = rightW - rw
+		rs.ai.W = rightW - rw
 	}
 	return rs
 }
