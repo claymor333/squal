@@ -65,14 +65,17 @@ tab bar, the last row is the footer. The body between them has **two columns**
 Rules:
 
 - **Tabs** = row 0, **footer** = last 1–2 rows. Body = `h - 2` rows.
-- **L (left rail)** — the schema tree, `22%` wide (32% when focused), full body
-  height. `L` collapses it to a sliver (or hides it) for maximum stage width.
-  Scrolls internally; a 500-table schema never affects other panes.
-- **R (right rail)** — one tabbed zone on the right, `rightW/3` wide when open,
-  full body height. Closed (zero width) when no tab is active. Contains `row`,
-  `hist`, and `ai` tabs; exactly one visible at a time.
-- **T (editor)** — `1` line idle → `min(8, body/3)` when focused. Border shows
-  the current default database.
+- **L (left rail)** — the schema tree at a **fixed 28-col width** (independent of
+  focus, so pane edges never move), full body height. `L`/`alt+l` collapses it to
+  give the stage its width. Scrolls internally; a 500-table schema never affects
+  other panes.
+- **R (right rail)** — one tabbed zone on the right at a **fixed 42-col width**
+  when open, full body height. Closed (zero width) when no tab is active.
+  Contains `row`, `hist`, and `ai` tabs; exactly one visible at a time. Both
+  rails degrade on narrow windows (below ~48 cols of stage, the schema shrinks
+  and the rail takes a third).
+- **T (editor)** — `1` line idle → `min(8, body/3)` when focused. Focus changes
+  height only, never width. Border shows the current default database.
 - **B (results stage)** — the largest surface, `min` floor 8 rows. Holds the
   active result set plus the ring of recent ones. This is where the product
   lives.

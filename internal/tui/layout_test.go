@@ -19,21 +19,25 @@ func TestLayoutFits(t *testing.T) {
 	}
 }
 
-func TestLayoutFocusExpands(t *testing.T) {
+func TestLayoutWidthsConsistentAcrossFocus(t *testing.T) {
 	l := newLayout()
-	idle := l.rects(120, 40, focusResults, false, false, 1).schema
-	focused := l.rects(120, 40, focusSchema, false, false, 1).schema
-	if focused.W <= idle.W {
-		t.Fatalf("focused schema should be wider: idle=%d focus=%d", idle.W, focused.W)
+	// focus must never change pane widths — only heights (editor) move.
+	base := l.rects(120, 40, focusResults, false, false, 1)
+	schema := l.rects(120, 40, focusSchema, false, false, 1)
+	if base.schema.W != schema.schema.W {
+		t.Fatalf("schema width changed with focus: %d vs %d", base.schema.W, schema.schema.W)
+	}
+	if base.editor.W != schema.editor.W || base.results.W != schema.results.W {
+		t.Fatalf("stage width changed with focus: editor %d vs %d", base.editor.W, schema.editor.W)
 	}
 }
 
-func TestLayoutRailTakesRightThird(t *testing.T) {
+func TestLayoutRailFixedWidth(t *testing.T) {
 	l := newLayout()
 	rs := l.rects(120, 40, focusResults, true, false, 1)
-	// rightW = 120 - schemaW(26) = 94; rail = 94/3
-	if rs.rail.W != 31 {
-		t.Fatalf("rail width = %d, want 31", rs.rail.W)
+	// rightW = 120 - schemaW(28) = 92; the rail holds a fixed 42.
+	if rs.rail.W != railColWidth {
+		t.Fatalf("rail width = %d, want %d", rs.rail.W, railColWidth)
 	}
 	if rs.rail.X+rs.rail.W > 120 {
 		t.Fatalf("rail escapes the window: %+v", rs.rail)
@@ -42,8 +46,19 @@ func TestLayoutRailTakesRightThird(t *testing.T) {
 		t.Fatalf("rail should span the body height: %d vs %d", rs.rail.H, rs.schema.H)
 	}
 	// editor/results shrink to make room for the rail
-	if rs.editor.W != 94-31 || rs.results.W != 94-31 {
+	if rs.editor.W != 92-railColWidth || rs.results.W != 92-railColWidth {
 		t.Fatalf("stage panes not shrunk: editor.W=%d results.W=%d", rs.editor.W, rs.results.W)
+	}
+}
+
+func TestLayoutRailShrinksOnNarrowWindow(t *testing.T) {
+	l := newLayout()
+	rs := l.rects(80, 40, focusResults, true, false, 1)
+	if rs.rail.W >= railColWidth {
+		t.Fatalf("narrow window should shrink the rail: %d", rs.rail.W)
+	}
+	if rs.editor.W < 15 {
+		t.Fatalf("stage collapsed: editor.W=%d", rs.editor.W)
 	}
 }
 

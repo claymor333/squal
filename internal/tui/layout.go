@@ -51,15 +51,25 @@ func lineCount(s string) int {
 	return n
 }
 
+// Fixed pane widths so the layout never reflows as focus moves. The left and
+// context rails keep these widths on any normal-size terminal; they degrade
+// only when the window is too narrow to leave the stage a usable minimum.
+const (
+	schemaColWidth = 28
+	railColWidth   = 42
+	stageMinWidth  = 48
+)
+
 // rects computes pane bounds for a w×h window with the given focus, whether the
 // context rail is open, whether the left rail is collapsed, and how many footer
 // rows are in use (1 normally, 2 while a toast is active). Row 0 is the tab bar
 // and the last footerH rows are the footer. The body between them is
-// horizontal: the schema tree is a left column (wider when focused), the editor
-// and results stack in the stage column, and the context rail (row/hist/ai
-// tabs) is a right-hand strip of the stage's full height. Collapsing the left
-// rail gives its width back to the stage. Every pane keeps at least one body
-// row so a tiny window never collapses a surface; the results floor of 8
+// horizontal: the schema tree is a left column (fixed width), the editor and
+// results stack in the stage column, and the context rail (row/hist/ai tabs) is
+// a right-hand strip of the stage's full height. Focus changes height (editor
+// grows when focused) but never width, so pane edges stay put. Collapsing the
+// left rail gives its width back to the stage. Every pane keeps at least one
+// body row so a tiny window never collapses a surface; the results floor of 8
 // degrades to whatever space remains.
 func (l *layout) rects(w, h int, focus paneFocus, railOpen, railCollapsed bool, footerH int) rects {
 	if w < 1 {
@@ -73,18 +83,17 @@ func (l *layout) rects(w, h int, focus paneFocus, railOpen, railCollapsed bool, 
 	}
 	bodyH := h - 1 - footerH
 
-	schemaW := w * 22 / 100
-	if focus == focusSchema {
-		schemaW = w * 32 / 100
-	}
-	if schemaW < 20 {
-		schemaW = 20
+	schemaW := schemaColWidth
+	if railCollapsed {
+		schemaW = 0
+	} else if w-schemaW < stageMinWidth {
+		schemaW = w - stageMinWidth // keep the stage usable on narrow windows
+		if schemaW < 1 {
+			schemaW = 1
+		}
 	}
 	if schemaW > w/2 {
 		schemaW = w / 2
-	}
-	if railCollapsed {
-		schemaW = 0
 	}
 
 	edH := 1
@@ -117,7 +126,10 @@ func (l *layout) rects(w, h int, focus paneFocus, railOpen, railCollapsed bool, 
 	rs.results = rect{X: rightX, Y: 1 + edH, W: rightW, H: resH}
 
 	if railOpen {
-		rw := rightW / 3
+		rw := railColWidth
+		if rw > rightW-stageMinWidth {
+			rw = rightW / 3 // narrow window: give the rail a third instead
+		}
 		if rw < 15 {
 			rw = 15
 		}
