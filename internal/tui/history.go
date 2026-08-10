@@ -1,6 +1,10 @@
 package tui
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/claymor333/squal/internal/state"
+)
 
 type undoActionMsg struct {
 	ID string
@@ -20,6 +24,25 @@ type historyView struct {
 
 func newHistoryView(rows []historyRow) *historyView {
 	return &historyView{rows: rows}
+}
+
+// SetActions rebuilds the list from the action store.
+func (h *historyView) SetActions(actions []*state.Action) {
+	h.rows = h.rows[:0]
+	for _, a := range actions {
+		h.rows = append(h.rows, historyRow{
+			ID:      a.ID,
+			Label:   a.Kind + " " + a.Table,
+			Verdict: a.Verdict.String(),
+			Status:  a.Status.String(),
+		})
+	}
+	if h.cursor > len(h.rows)-1 {
+		h.cursor = len(h.rows) - 1
+	}
+	if h.cursor < 0 {
+		h.cursor = 0
+	}
 }
 
 func (h *historyView) moveDown() {
@@ -50,5 +73,6 @@ func (h *historyView) view() string {
 		}
 		out += fmt.Sprintf("%s %s [%s/%s] %s\n", mark, r.ID, r.Verdict, r.Status, r.Label)
 	}
+	out += styleDim.Render("enter undo · esc close")
 	return out
 }

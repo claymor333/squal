@@ -15,24 +15,45 @@ var (
 			Background(lipgloss.Color("236"))
 )
 
-// statusView renders the one-line footer: connection, result count, elapsed, keys.
-func statusView(name string, r *resultsView, elapsed string, err error, focus paneFocus) string {
-	if err != nil {
-		return styleStatusErr.Render(" ✗ " + err.Error() + " ")
+// statusInfo carries everything the one-line footer needs to render. Errors are
+// scoped to whichever pane owns them; the footer is the transient error slot.
+type statusInfo struct {
+	Conn    string
+	Results *resultsView
+	Elapsed string
+	Err     error
+	Focus   paneFocus
+}
+
+// statusView renders the one-line footer: conn | rows | elapsed on the left,
+// the focused pane's keys on the right. A scoped error replaces the left
+// cluster so it is always visible.
+func statusView(s statusInfo) string {
+	if s.Err != nil {
+		return styleStatusErr.Render(" ✗ " + s.Err.Error() + " ")
+	}
+	if s.Results != nil && s.Results.err != nil {
+		return styleStatusErr.Render(" ✗ " + s.Results.err.Error() + " ")
 	}
 	count := "–"
-	if r != nil {
-		count = r.rowCount()
+	if s.Results != nil {
+		count = s.Results.rowCount() // "N rows…" while streaming, "N rows" when done
 	}
-	label := fmt.Sprintf(" %s | %s | %s ", name, count, elapsed)
+	label := fmt.Sprintf(" %s | %s | %s ", s.Conn, count, s.Elapsed)
 	var keys string
-	switch focus {
+	switch s.Focus {
 	case focusSchema:
-		keys = "↑↓ move · enter open/select · tab focus"
+		keys = "↑↓ move · enter open/select · c connect · tab focus"
 	case focusEditor:
-		keys = "type · enter run · ↑ history · tab focus"
+		keys = "type · alt+enter run · ↑↓←→ move · ctrl+p/n history · tab focus"
 	case focusResults:
-		keys = "↑↓ move · s sort · f filter · n next · tab focus"
+		keys = "↑↓ move · ←→ col · s sort · f filter · n next · enter/o row · tab focus"
+	case focusRow:
+		keys = "↑↓ field · enter edit · r raw · s save · esc close"
+	case focusHistory:
+		keys = "↑↓ move · enter undo · esc close"
+	case focusAI:
+		keys = "type · enter run · a mode · esc interrupt"
 	}
 	return styleStatus.Render(label + " | " + keys)
 }

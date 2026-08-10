@@ -8,26 +8,31 @@ routes keys and messages. Panes talk to the DB only through the services
 
 | File | Role |
 |------|------|
-| `model.go` | root model: tabs, focus, keymap, batch pump, connection + AI wiring |
+| `model.go` | root model: tabs, focus, keymap, batch pump, connection + AI wiring, layout-driven render |
 | `messages.go` | ALL shared `tea.Msg` types + `paneFocus` |
-| `mouse.go` | `paneLayout` (Y-bounds per pane), `handleMouse` (click focus, click-select, wheel scroll) |
-| `schema_pane.go` | DB/table tree → `browseRequestMsg` |
+| `layout.go` | pure pane-rect computation from (w,h,focus,rowOpen), `clip`/`fit`/`paneBox` |
+| `mouse.go` | `handleMouse` (rect hit-testing: click focus, click-select, wheel scroll) |
+| `schema_pane.go` | DB/table tree (absolute-cursor + internal scroll) → `browseRequestMsg` |
 | `editor.go` | multiline SQL editor + history → `runQueryMsg` |
-| `results.go` | virtualized grid on `Columnar` |
+| `results.go` | virtualized grid on `Columnar`, viewport settable |
 | `rowpanel.go` | JSON-shaped row editor (see Known gaps) |
 | `history.go` | action history → `undoActionMsg` (see Known gaps) |
-| `writer.go` | undo contract executor (the write service) |
-| `aipanel.go` | Ask/Quick panel, confirm dialog, Esc interrupt |
+| `writer.go` | undo contract executor (the write service); `editorFor` + structured save/delete |
+| `aipanel.go` | Ask/NL→SQL panel, confirm dialog, Esc interrupt |
+| `help.go` | `?` key-reference overlay |
 | `connect.go` | connection dialog |
-| `statusbar.go` | one-line footer |
+| `statusbar.go` | one-line footer (scoped error slot) |
 
 ## Invariants (do not break)
 
 - **Msg types live in `messages.go`, never inline in a pane.**
-- **Mouse layout is computed, not hardcoded.** `paneLayout` derives pane Y-bounds
-  from rendered line counts (schema body height varies with the tree). If the View
-  layout changes (new pane, reordering), update `newPaneLayout` + `schemaBodyLines`
-  and the mouse tests together.
+- **The renderer and the mouse share one geometry source.** `layout.rects`
+  derives pane rects from the window size; `View` renders inside those rects and
+  `handleMouse` hit-tests them. A new pane means one change in `layout.go` plus
+  its tests — never hand-maintained Y-arithmetic.
+- **View never overflows the window.** Every pane body is clipped (`paneBox`) to
+  its rect; the schema tree scrolls internally; the results viewport is
+  computed, not a constant. Anything that renders must stay inside `(w, h)`.
 - **Panes are pure-ish**: mutate `connData`, emit `tea.Msg`s, return `tea.Cmd`s.
   They don't hold a `*sql.DB`.
 - **The batch pump orders reads.** The fetch goroutine appends into `Columnar`;
@@ -41,7 +46,8 @@ routes keys and messages. Panes talk to the DB only through the services
 ## Change here
 
 - New pane → new file (pure state + `view()`), msg types in `messages.go`, a
-  `paneFocus` value, Tab cycle + keys in `model.handleKey`, render in `View`.
+  `paneFocus` value, Tab cycle + keys in `model.handleKey`, a rect in `layout.go`,
+  render in `View`.
 - New keymap entry → `handleKey` switch.
 
 ## Tests
@@ -55,5 +61,6 @@ Did this change touch an invariant above? If yes, update it here.
 
 ## Known gaps (see AGENTS.md — tracked as issues)
 
-Row panel unreachable (#1), hand-driven writes not dispatched (#2), plus polish
-items #3–#8.
+Row panel and hand-driven writes are wired (issues #1/#2 closed). Remaining
+polish items #3–#8 stand; plus `?` help is full-screen rather than a centered
+overlay.

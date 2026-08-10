@@ -43,6 +43,8 @@ type connData struct {
 	ed          *editor
 	wr          *writer
 	results     *resultsView
+	row         *rowPanel // right-side row editor; nil when closed
+	hist        *historyView
 	browse      *browseRequestMsg // table browsed by the current results, for load-next
 	currentDB   string            // database selected in the tree; default schema for unqualified SQL
 	job         *fetchJob
@@ -112,17 +114,30 @@ func (m *model) wireAI(c *connData, conn *db.Conn) {
 // --- model -------------------------------------------------------------------
 
 type model struct {
-	cfg      *config.Config
-	conns    []*connData
-	active   int
-	focus    paneFocus
-	connect  *connectView
-	ai       *aiPanel
-	store    *state.Store
-	width    int
-	height   int
-	lastErr  error
-	quitting bool
+	cfg          *config.Config
+	conns        []*connData
+	active       int
+	focus        paneFocus
+	connect      *connectView
+	ai           *aiPanel
+	store        *state.Store
+	width        int
+	height       int
+	transientErr error // last transient error (config save, store read); cleared on the next key
+	confirm      *confirmModal
+	help         bool
+	quitting     bool
+}
+
+// confirmModal is a y/n prompt overlaying the layout. yes builds the command to
+// run once confirmed; the model executes it only on an explicit 'y'.
+type confirmModal struct {
+	prompt string
+	yes    func(*model) tea.Cmd
+}
+
+func (c *confirmModal) view() string {
+	return styleErr.Render("⚠ " + c.prompt + " (y/n)")
 }
 
 func New(cfg *config.Config, profiles []config.Profile) *model {
@@ -180,22 +195,42 @@ func (m *model) prevTab() {
 	}
 }
 
-// focusAI is the streaming AI panel focus; it follows results in the Tab cycle.
-const focusAI paneFocus = focusResults + 1
-
-// nextFocus advances the key focus schema → editor → results → ai.
-func nextFocus(f paneFocus) paneFocus {
-	if f < focusAI {
-		return f + 1
+// focusCycle returns the tab order for the active connection. The row and
+// history panes only join the cycle while they are open.
+func (m *model) focusCycle() []paneFocus {
+	cyc := []paneFocus{focusSchema, focusEditor, focusResults}
+	if m.active >= 0 && m.active < len(m.conns) {
+		cur := m.conns[m.active]
+		if cur.row != nil {
+			cyc = append(cyc, focusRow)
+		}
+		if cur.hist != nil {
+			cyc = append(cyc, focusHistory)
+		}
 	}
-	return focusSchema
+	return append(cyc, focusAI)
 }
 
-func prevFocus(f paneFocus) paneFocus {
-	if f > focusSchema {
-		return f - 1
+// nextFocus advances the key focus through the open panes in tab order.
+func (m *model) nextFocus() paneFocus {
+	cyc := m.focusCycle()
+	for i, f := range cyc {
+		if f == m.focus {
+			return cyc[(i+1)%len(cyc)]
+		}
 	}
-	return focusAI
+	return cyc[0]
+}
+
+// prevFocus steps the key focus back through the open panes.
+func (m *model) prevFocus() paneFocus {
+	cyc := m.focusCycle()
+	for i, f := range cyc {
+		if f == m.focus {
+			return cyc[(i-1+len(cyc))%len(cyc)]
+		}
+	}
+	return cyc[len(cyc)-1]
 }
 
 // onBrowse converts a schema selection into a browse query ready to run.
@@ -228,7 +263,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		c.loading = false
 		if msg.err != nil {
 			c.loadErr = msg.err
-			m.lastErr = msg.err
 			if msg.conn != nil {
 				msg.conn.Close()
 			}
@@ -272,12 +306,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cur.results.done = true
 			if msg.Err != nil {
 				cur.results.err = msg.Err
-				m.lastErr = msg.Err
 			} else {
 				cur.lastElapsed = msg.Elapsed
 			}
 		} else if msg.Err != nil {
-			m.lastErr = msg.Err
+			m.transientErr = msg.Err
 		}
 		return m, nil
 
@@ -294,31 +327,184 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cur := m.conns[m.active]
 		cur.browse = nil
 		return m, m.startFetch(context.Background(), msg.SQL)
+
+	case saveRowMsg:
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		if cur.wr == nil || cur.browse == nil {
+			return m, nil
+		}
+		return m, m.doSaveRow(cur, msg.Before, msg.After, msg.OrigIdx)
+
+	case deleteRowMsg:
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		if cur.wr == nil || cur.browse == nil {
+			return m, nil
+		}
+		return m, m.doDeleteRow(cur, msg.Row, msg.PK)
+
+	case rowWriteDoneMsg:
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		if msg.Err != nil {
+			if cur.results != nil {
+				cur.results.err = msg.Err
+			}
+			return m, nil
+		}
+		if msg.Deleted && cur.browse != nil {
+			// the row is gone; re-browse so the grid reflects the table
+			if rq, ok := m.onBrowse(*cur.browse).(runQueryMsg); ok {
+				return m, m.startFetch(context.Background(), rq.SQL)
+			}
+		}
+		if cur.results != nil && msg.OrigIdx >= 0 && msg.After != nil {
+			patchRow(cur.results, msg.OrigIdx, msg.After)
+		}
+		cur.row = nil
+		if m.focus == focusRow {
+			m.focus = focusResults
+		}
+		return m, nil
+
+	case historyLoadedMsg:
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		if cur.hist == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.transientErr = msg.Err
+			return m, nil
+		}
+		cur.hist.SetActions(msg.Rows)
+		return m, nil
+
+	case undoDoneMsg:
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		if msg.Err != nil {
+			m.transientErr = msg.Err
+			return m, nil
+		}
+		var cmds []tea.Cmd
+		if m.store != nil {
+			cmds = append(cmds, func() tea.Msg {
+				rows, err := m.store.List(50)
+				return historyLoadedMsg{Rows: rows, Err: err}
+			})
+		}
+		if cur.browse != nil && cur.browse.Database == msg.DB && cur.browse.Table == msg.Table {
+			if rq, ok := m.onBrowse(*cur.browse).(runQueryMsg); ok {
+				cmds = append(cmds, m.startFetch(context.Background(), rq.SQL))
+			}
+		}
+		if len(cmds) == 0 {
+			return m, nil
+		}
+		return m, tea.Batch(cmds...)
 	}
 	return m, nil
+}
+
+// doSaveRow runs the structured UPDATE off the event loop.
+func (m *model) doSaveRow(cur *connData, before, after map[string]string, orig int) tea.Cmd {
+	b := *cur.browse
+	connName := cur.profile.Name
+	return func() tea.Msg {
+		err := cur.wr.saveRow(context.Background(), connName, b.Database, b.Table, before, after)
+		return rowWriteDoneMsg{Err: err, OrigIdx: orig, After: after}
+	}
+}
+
+// doDeleteRow runs the structured DELETE off the event loop.
+func (m *model) doDeleteRow(cur *connData, row map[string]string, pk []string) tea.Cmd {
+	b := *cur.browse
+	connName := cur.profile.Name
+	return func() tea.Msg {
+		err := cur.wr.deleteRow(context.Background(), connName, b.Database, b.Table, pk, row)
+		return rowWriteDoneMsg{Err: err, Deleted: true}
+	}
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.connect != nil {
 		return m.handleConnectKey(msg)
 	}
+	if m.help {
+		if msg.String() == "esc" {
+			m.help = false
+		}
+		return m, nil
+	}
+	if m.confirm != nil {
+		// modal: y approves, n/esc cancels, ctrl+c falls through to quit.
+		switch msg.String() {
+		case "y":
+			yes := m.confirm.yes
+			m.confirm = nil
+			if yes != nil {
+				return m, yes(m)
+			}
+		case "n", "esc":
+			m.confirm = nil
+		}
+		if msg.String() != "ctrl+c" {
+			return m, nil
+		}
+	}
+	m.transientErr = nil // the status error slot is one-shot; any key clears it
 	switch msg.String() {
 	case "ctrl+c":
 		if m.active >= 0 && m.active < len(m.conns) {
 			return m, closeConnection(m.active, m.conns[m.active].conn)
 		}
 		return m, tea.Quit
+	case "ctrl+d":
+		if m.active >= 0 && m.active < len(m.conns) {
+			return m, closeConnection(m.active, m.conns[m.active].conn)
+		}
+		return m, nil
+	case "f1":
+		m.help = true
+		return m, nil
+	case "?":
+		if m.focus == focusEditor || m.focus == focusAI || m.focus == focusRow {
+			break // '?' is SQL/input text in these panes; use F1 for help
+		}
+		m.help = true
+		return m, nil
 	case "tab":
-		m.focus = nextFocus(m.focus)
+		m.focus = m.nextFocus()
 		return m, nil
 	case "shift+tab":
-		m.focus = prevFocus(m.focus)
+		m.focus = m.prevFocus()
 		return m, nil
+	case "u":
+		return m, m.toggleHistory(m.conns[m.active])
 	case "q":
-		if m.focus == focusEditor || m.focus == focusAI || m.active < 0 || m.active >= len(m.conns) {
+		if m.focus == focusEditor || m.focus == focusAI || m.focus == focusRow || m.focus == focusHistory || m.active < 0 || m.active >= len(m.conns) {
 			break // 'q' is text input in the editor/AI panel; ignore it elsewhere
 		}
-		return m, closeConnection(m.active, m.conns[m.active].conn)
+		cur := m.conns[m.active]
+		m.confirm = &confirmModal{
+			prompt: "close connection " + cur.profile.Name + "?",
+			yes: func(m *model) tea.Cmd {
+				return closeConnection(m.active, m.conns[m.active].conn)
+			},
+		}
+		return m, nil
 	}
 	if m.active < 0 || m.active >= len(m.conns) {
 		return m, nil
@@ -356,18 +542,41 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "up":
 			if cur.ed != nil {
-				cur.ed.historyUp()
+				cur.ed.moveUp()
+			}
+		case "down":
+			if cur.ed != nil {
+				cur.ed.moveDown()
+			}
+		case "left":
+			if cur.ed != nil {
+				cur.ed.moveLeft()
+			}
+		case "right":
+			if cur.ed != nil {
+				cur.ed.moveRight()
 			}
 		case "backspace":
 			if cur.ed != nil {
 				cur.ed.backspace()
 			}
-		case "enter":
-			// Enter runs the query (bubbletea has no ctrl+enter key — the
-			// terminal sends a plain enter for it). Always consume the
-			// keystroke (clear + history); dispatch only with a live conn.
+		case "ctrl+p":
 			if cur.ed != nil {
-				if rq, ok := cur.ed.run().(runQueryMsg); ok {
+				cur.ed.historyBack()
+			}
+		case "ctrl+n":
+			if cur.ed != nil {
+				cur.ed.historyForward()
+			}
+		case "enter":
+			// Enter inserts a newline; running the query moved to alt+enter /
+			// ctrl+r so multi-line SQL is possible (U3).
+			if cur.ed != nil {
+				cur.ed.newline()
+			}
+		case "alt+enter", "ctrl+r":
+			if cur.ed != nil {
+				if rq, ok := cur.ed.runQuery().(runQueryMsg); ok {
 					if cur.conn != nil {
 						cur.browse = nil
 						return m, m.startFetch(context.Background(), rq.SQL)
@@ -381,17 +590,144 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case focusResults:
+		r := cur.results
 		switch msg.String() {
 		case "up":
-			scrollResults(cur.results, -1)
+			scrollResults(r, -1)
 		case "down":
-			scrollResults(cur.results, 1)
+			scrollResults(r, 1)
+		case "left":
+			if r != nil {
+				r.moveCol(-1)
+			}
+		case "right":
+			if r != nil {
+				r.moveCol(1)
+			}
 		case "s":
-			toggleSort(cur.results)
+			if r != nil {
+				r.sortCursor()
+			}
 		case "f":
-			// filter prompt deferred to a later phase; sort is the wired behavior
+			if r != nil {
+				r.startFilter()
+			}
+		case "esc":
+			if r != nil {
+				r.endFilter()
+			}
+		case "backspace":
+			if r != nil {
+				r.popFilter()
+			}
 		case "n":
 			return m, m.loadNext(cur)
+		case "enter", "o":
+			if cur.browse != nil && r != nil && len(r.order) > 0 {
+				idx := r.order[r.top+r.selRow]
+				p := newRowPanel()
+				p.SetRow(rowAt(r, idx))
+				cur.row = p
+				m.focus = focusRow
+			}
+		case "delete":
+			if cur.browse != nil && r != nil && len(r.order) > 0 {
+				idx := r.order[r.top+r.selRow]
+				row := rowAt(r, idx)
+				b := *cur.browse
+				m.confirm = &confirmModal{
+					prompt: "delete " + b.Table + " row (" + fmtPK(row, b.PK) + ")?",
+					yes: func(m *model) tea.Cmd {
+						return m.doDeleteRow(cur, row, b.PK)
+					},
+				}
+			}
+		default:
+			runes := []rune(msg.String())
+			if r != nil && r.filterMode && len(runes) == 1 {
+				r.appendFilter(runes[0])
+			}
+		}
+	case focusRow:
+		if cur.row == nil {
+			break
+		}
+		p := cur.row
+		switch {
+		case p.editing:
+			switch msg.String() {
+			case "enter":
+				p.commitEdit()
+			case "backspace":
+				p.backspaceEdit()
+			case "esc":
+				p.cancelEdit()
+			default:
+				runes := []rune(msg.String())
+				if len(runes) == 1 {
+					p.appendEdit(runes[0])
+				}
+			}
+		case p.raw:
+			switch msg.String() {
+			case "esc", "enter":
+				p.toggleRaw()
+			case "backspace":
+				if len(p.rawBuf) > 0 {
+					p.rawBuf = p.rawBuf[:len(p.rawBuf)-1]
+				}
+			default:
+				runes := []rune(msg.String())
+				if len(runes) == 1 {
+					p.rawBuf += string(runes[0])
+				}
+			}
+		default:
+			switch msg.String() {
+			case "up":
+				p.moveUp()
+			case "down":
+				p.moveDown()
+			case "enter":
+				p.startEdit()
+			case "esc":
+				cur.row = nil
+				m.focus = focusResults
+			case "r":
+				p.toggleRaw()
+			case "ctrl+s", "s":
+				r := cur.results
+				if r == nil || cur.browse == nil || len(r.order) == 0 {
+					break
+				}
+				idx := r.order[r.top+r.selRow]
+				b := *cur.browse
+				before := rowAt(r, idx)
+				return m, func() tea.Msg {
+					after, err := p.Values()
+					if err != nil {
+						return rowWriteDoneMsg{Err: err}
+					}
+					return saveRowMsg{Before: before, After: after, PK: b.PK, OrigIdx: idx}
+				}
+			}
+		}
+	case focusHistory:
+		if cur.hist == nil {
+			break
+		}
+		switch msg.String() {
+		case "up":
+			cur.hist.moveUp()
+		case "down":
+			cur.hist.moveDown()
+		case "enter":
+			if ua, ok := cur.hist.selectRow().(undoActionMsg); ok {
+				return m, m.doUndo(cur, ua.ID)
+			}
+		case "esc":
+			cur.hist = nil
+			m.focus = focusResults
 		}
 	case focusAI:
 		if m.ai == nil {
@@ -443,7 +779,7 @@ func (m *model) handleConnectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.cfg.AddProfile(p)
 		if err := m.cfg.Save(); err != nil {
-			m.lastErr = err
+			m.transientErr = err
 			return m, nil
 		}
 		idx := len(m.conns)
@@ -462,6 +798,59 @@ func (m *model) handleConnectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.connect.setField(m.connect.cur, m.connect.value(m.connect.cur)+string(runes[0]))
 		}
 		return m, nil
+	}
+}
+
+// toggleHistory opens or closes the action-history panel. Opening kicks off a
+// store.List so the panel fills asynchronously.
+func (m *model) toggleHistory(cur *connData) tea.Cmd {
+	if m.store == nil {
+		return nil
+	}
+	if cur.hist != nil {
+		cur.hist = nil
+		if m.focus == focusHistory {
+			m.focus = focusResults
+		}
+		return nil
+	}
+	cur.hist = newHistoryView(nil)
+	m.focus = focusHistory
+	return func() tea.Msg {
+		rows, err := m.store.List(50)
+		return historyLoadedMsg{Rows: rows, Err: err}
+	}
+}
+
+// doUndo restores an action from the log via RowEditor.Undo, marks it Undone,
+// and returns a message so the model can refresh both the list and the grid.
+func (m *model) doUndo(cur *connData, id string) tea.Cmd {
+	store := m.store
+	conn := cur.conn
+	wr := cur.wr
+	return func() tea.Msg {
+		act, err := store.Find(id)
+		if err != nil {
+			return undoDoneMsg{Err: err}
+		}
+		ctx := context.Background()
+		pk, err := conn.PrimaryKey(ctx, act.Database, act.Table)
+		if err != nil {
+			return undoDoneMsg{Err: err}
+		}
+		pkVals := make(map[string]string, len(pk))
+		for _, p := range pk {
+			pkVals[p] = act.Before[p]
+		}
+		ed, err := wr.editorFor(act.Database, act.Table)
+		if err != nil {
+			return undoDoneMsg{Err: err}
+		}
+		if err := ed.Undo(ctx, act.Kind, pkVals, act.Before, act.After); err != nil {
+			return undoDoneMsg{Err: err}
+		}
+		_ = store.SetStatus(id, state.Undone)
+		return undoDoneMsg{DB: act.Database, Table: act.Table}
 	}
 }
 
@@ -589,8 +978,6 @@ func lastPKVals(r *resultsView, pk []string) ([]string, bool) {
 
 // --- results interaction -----------------------------------------------------
 
-const resultsViewport = 8
-
 // scrollResults moves the selection by one logical row, sliding the window
 // when the selection would leave the viewport.
 func scrollResults(r *resultsView, dir int) {
@@ -599,7 +986,7 @@ func scrollResults(r *resultsView, dir int) {
 	}
 	if dir > 0 {
 		if r.top+r.selRow < len(r.order)-1 {
-			if r.selRow < resultsViewport-1 {
+			if r.selRow < r.viewport-1 {
 				r.selRow++
 			} else {
 				r.top++
@@ -616,18 +1003,16 @@ func scrollResults(r *resultsView, dir int) {
 	}
 }
 
-// toggleSort flips the sort on the current column, defaulting to column 0.
-func toggleSort(r *resultsView) {
-	if r == nil || r.data == nil {
-		return
+// sort/column/filter interaction moved into results.go (sortCursor, moveCol,
+// startFilter, ...) in U2; the model only routes keys to them.
+
+// fmtPK renders pk=value pairs for confirm prompts and status text.
+func fmtPK(row map[string]string, pk []string) string {
+	vals := make([]string, len(pk))
+	for i, p := range pk {
+		vals[i] = p + "=" + row[p]
 	}
-	if r.sortCol < 0 {
-		r.sortCol = 0
-		r.sortAsc = true
-	} else {
-		r.sortAsc = !r.sortAsc
-	}
-	r.rebuildOrder()
+	return strings.Join(vals, ",")
 }
 
 // --- view --------------------------------------------------------------------
@@ -648,33 +1033,55 @@ func (m *model) View() string {
 		return "No connections configured.\n"
 	}
 
-	var tabs string
-	for i, c := range m.conns {
-		label := c.profile.Name
-		if i == m.active {
-			tabs += styleTitle.Render(fmt.Sprintf(" %s ", label)) + " "
-		} else {
-			tabs += styleDim.Render(" "+label+" ") + " "
-		}
-	}
-
 	cur := m.conns[m.active]
-	var body string
+	rs := newLayout().rects(m.width, m.height, m.focus, cur.row != nil, cur.hist != nil)
+
+	var out strings.Builder
+	out.WriteString(fit(renderTabs(m.conns, m.active), rs.tabs.W, rs.tabs.H))
+
+	schemaBody := renderSchemaTree(cur.dbs)
 	switch {
 	case cur.loading:
-		body = styleDim.Render("connecting to " + cur.profile.Name + "…")
+		schemaBody = styleDim.Render("connecting to " + cur.profile.Name + "…")
 	case cur.loadErr != nil:
-		body = styleErr.Render("connection failed: " + cur.loadErr.Error())
+		schemaBody = styleErr.Render("connection failed: " + cur.loadErr.Error())
 	case cur.pane != nil:
-		body = cur.pane.view()
-	default:
-		body = renderSchemaTree(cur.dbs)
+		cur.pane.SetLines(rs.schema.H - 3) // title + borders
+		schemaBody = cur.pane.view()
+	}
+	out.WriteString(paneBox("schema", m.focus == focusSchema, schemaBody, rs.schema.W, rs.schema.H))
+
+	editorBody := styleDim.Render("(empty)")
+	if cur.ed != nil {
+		cur.ed.SetViewport(rs.editor.W-2, rs.editor.H-2)
+		editorBody = cur.ed.view()
+	}
+	resultsBody := styleDim.Render("(no query)")
+	if cur.results != nil {
+		cur.results.SetViewport(rs.results.H - 4) // title + borders + column header
+		resultsBody = cur.results.view(rs.results.W - 2)
 	}
 
-	editorView := styleDim.Render("(empty)")
-	if cur.ed != nil {
-		editorView = cur.ed.view()
+	if cur.row != nil {
+		edBox := paneBox("editor", m.focus == focusEditor, editorBody, rs.editor.W, rs.editor.H)
+		resBox := paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H)
+		rowBox := paneBox("row", m.focus == focusRow, cur.row.view(), rs.row.W, rs.row.H)
+		left := lipgloss.JoinVertical(lipgloss.Left, edBox, resBox)
+		out.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, rowBox))
+	} else {
+		out.WriteString(paneBox("editor", m.focus == focusEditor, editorBody, rs.editor.W, rs.editor.H))
+		out.WriteString(paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H))
 	}
+
+	if cur.hist != nil {
+		out.WriteString(paneBox("history", m.focus == focusHistory, cur.hist.view(), rs.hist.W, rs.hist.H))
+	}
+
+	aiBody := renderAI(m.ai)
+	if m.ai != nil {
+		m.ai.SetLines(rs.ai.H - 3)
+	}
+	out.WriteString(paneBox("ai", m.focus == focusAI, aiBody, rs.ai.W, rs.ai.H))
 
 	var elapsed string
 	if cur.results != nil && cur.job != nil {
@@ -687,40 +1094,52 @@ func (m *model) View() string {
 	if elapsed == "" {
 		elapsed = "–"
 	}
-	var rerr error
+	statusErr := error(nil)
 	if cur.results != nil {
-		rerr = cur.results.err
+		statusErr = cur.results.err
+	}
+	if statusErr == nil {
+		statusErr = m.transientErr
+	}
+	if m.confirm != nil {
+		out.WriteString(fit(m.confirm.view(), rs.status.W, rs.status.H))
+	} else {
+		out.WriteString(fit(statusView(statusInfo{
+			Conn:    cur.profile.Name,
+			Results: cur.results,
+			Elapsed: elapsed,
+			Err:     statusErr,
+			Focus:   m.focus,
+		}), rs.status.W, rs.status.H))
 	}
 
-	var errline string
-	if m.lastErr != nil {
-		errline = styleErr.Render("✗ "+m.lastErr.Error()) + "\n"
+	base := out.String()
+	if m.help {
+		box := renderHelp(m.focus, m.width, m.height)
+		pad := (m.height - lineCount(box)) / 2
+		if pad > 0 {
+			return strings.Repeat("\n", pad) + box + "\n"
+		}
+		return box + "\n"
 	}
-
-	base := stylePane.Render(
-		tabs + "\n" +
-			sectionHeader("schema", m.focus == focusSchema) + "\n" +
-			body + "\n" +
-			sectionHeader("editor", m.focus == focusEditor) + "\n" +
-			editorView + "\n" +
-			sectionHeader("results", m.focus == focusResults) + "\n" +
-			renderResults(cur.results) + "\n" +
-			sectionHeader("ai", m.focus == focusAI) + "\n" +
-			renderAI(m.ai) + "\n" +
-			errline +
-			statusView(cur.profile.Name, cur.results, elapsed, rerr, m.focus) + "\n",
-	)
 	if m.connect != nil {
 		return renderConnectModal(m.connect) + "\n" + base
 	}
 	return base
 }
 
-func sectionHeader(label string, focused bool) string {
-	if focused {
-		return styleAccent.Render("▸ " + label)
+// renderTabs draws the connection tabs, highlighting the active one.
+func renderTabs(conns []*connData, active int) string {
+	var tabs string
+	for i, c := range conns {
+		label := c.profile.Name
+		if i == active {
+			tabs += styleTitle.Render(fmt.Sprintf(" %s ", label)) + " "
+		} else {
+			tabs += styleDim.Render(" "+label+" ") + " "
+		}
 	}
-	return styleDim.Render("  " + label)
+	return tabs
 }
 
 // renderAI renders the streaming AI panel, or an idle hint when unwired.
@@ -761,63 +1180,7 @@ func renderSchemaTree(dbs []db.Database) string {
 	return out
 }
 
-// renderResults renders a compact grid over the loaded rows.
-func renderResults(r *resultsView) string {
-	if r == nil {
-		return styleDim.Render("(no query)")
-	}
-	if r.err != nil {
-		return styleErr.Render("✗ " + r.err.Error())
-	}
-	if r.data == nil || len(r.data.Columns) == 0 {
-		return styleDim.Render("(no columns)")
-	}
-	if len(r.order) == 0 {
-		return styleDim.Render("(no rows)")
-	}
-	var b strings.Builder
-	for c, col := range r.data.Columns {
-		if c > 0 {
-			b.WriteString(" │ ")
-		}
-		head := col
-		if r.sortCol == c {
-			if r.sortAsc {
-				head += " ▲"
-			} else {
-				head += " ▼"
-			}
-		}
-		b.WriteString(styleAccent.Render(head))
-	}
-	b.WriteString("\n")
-	end := r.top + resultsViewport
-	if end > len(r.order) {
-		end = len(r.order)
-	}
-	for row := r.top; row < end; row++ {
-		mark := "  "
-		if row == r.top+r.selRow {
-			mark = "◉ "
-		}
-		b.WriteString(mark)
-		for c := range r.data.Columns {
-			if c > 0 {
-				b.WriteString(" │ ")
-			}
-			b.WriteString(truncate(r.data.Value(c, r.order[row]), 24))
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
+// renderResults moved to results.go as (*resultsView).view(w) in U2; the grid
+// owns its own rendering so sort/filter/column-cursor stay in one file.
 
 var _ tea.Model = (*model)(nil)

@@ -15,97 +15,145 @@ type browseRequestMsg struct {
 	PK       []string
 }
 
+// schemaPane is the DB/table tree. The cursor is an absolute line index into the
+// rendered tree (one line per db header, one per expanded table), so selection
+// and viewport scrolling share a single coordinate space.
 type schemaPane struct {
-	dbs        []db.Database
-	expanded   map[int]bool
-	dbIndex    int
-	tableIndex int
-	onTable    bool // cursor on a table row (vs the db header)
+	dbs      []db.Database
+	expanded map[int]bool
+	cursor   int
+	lines    int // viewport height; 0 = unbounded (tests)
+	top      int // first visible line
 }
 
 func newSchemaPane(dbs []db.Database) *schemaPane {
 	return &schemaPane{dbs: dbs, expanded: map[int]bool{}}
 }
 
+// toggleDB expands or collapses a database's table list.
 func (p *schemaPane) toggleDB(i int) {
+	if i < 0 || i >= len(p.dbs) {
+		return
+	}
 	p.expanded[i] = !p.expanded[i]
+	p.clampCursor()
 }
 
-// moveDown moves the cursor one logical row down; returns false when at bottom.
+// SetLines bounds the viewport; view() renders only lines [top, top+lines).
+func (p *schemaPane) SetLines(n int) {
+	p.lines = n
+	p.clampTop()
+}
+
+// treeLen returns the total rendered line count.
+func (p *schemaPane) treeLen() int {
+	n := len(p.dbs)
+	for i, d := range p.dbs {
+		if p.expanded[i] {
+			n += len(d.Tables)
+		}
+	}
+	return n
+}
+
+func (p *schemaPane) clampCursor() {
+	if max := p.treeLen() - 1; p.cursor > max {
+		p.cursor = max
+	}
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
+	p.clampTop()
+}
+
+// clampTop keeps the cursor inside the viewport window when it is bounded.
+func (p *schemaPane) clampTop() {
+	if p.lines <= 0 {
+		p.top = 0
+		return
+	}
+	if p.cursor < p.top {
+		p.top = p.cursor
+	}
+	if p.cursor >= p.top+p.lines {
+		p.top = p.cursor - p.lines + 1
+	}
+	if max := p.treeLen() - p.lines; p.top > max {
+		p.top = max
+	}
+	if p.top < 0 {
+		p.top = 0
+	}
+}
+
 func (p *schemaPane) moveDown() bool {
-	if p.dbIndex >= len(p.dbs) {
+	if p.cursor >= p.treeLen()-1 {
 		return false
 	}
-	if p.onTable {
-		if p.tableIndex < len(p.dbs[p.dbIndex].Tables)-1 {
-			p.tableIndex++
-			return true
-		}
-		p.onTable = false
-		if p.dbIndex < len(p.dbs)-1 {
-			p.dbIndex++
-		}
-		return true
-	}
-	if p.expanded[p.dbIndex] && len(p.dbs[p.dbIndex].Tables) > 0 {
-		p.onTable = true
-		p.tableIndex = 0
-		return true
-	}
-	if p.dbIndex < len(p.dbs)-1 {
-		p.dbIndex++
-		return true
-	}
-	return false
+	p.cursor++
+	p.clampTop()
+	return true
 }
 
 func (p *schemaPane) moveUp() bool {
-	if p.dbIndex < 0 {
+	if p.cursor <= 0 {
 		return false
 	}
-	if p.onTable {
-		if p.tableIndex > 0 {
-			p.tableIndex--
-			return true
-		}
-		p.onTable = false
-		return true
-	}
-	if p.dbIndex > 0 {
-		p.dbIndex--
-		if p.expanded[p.dbIndex] && len(p.dbs[p.dbIndex].Tables) > 0 {
-			p.onTable = true
-			p.tableIndex = len(p.dbs[p.dbIndex].Tables) - 1
-		}
-		return true
-	}
-	return false
+	p.cursor--
+	p.clampTop()
+	return true
 }
 
-func (p *schemaPane) selectCurrent() any {
-	if p.onTable {
-		d := p.dbs[p.dbIndex]
-		t := d.Tables[p.tableIndex]
-		var pk []string
-		for _, c := range t.Columns {
-			if c.Key == "PRI" {
-				pk = append(pk, c.Name)
+// current identifies the tree entry under the cursor.
+func (p *schemaPane) current() (dbIdx, tableIdx int, onTable bool) {
+	line := 0
+	for i, d := range p.dbs {
+		if line == p.cursor {
+			return i, 0, false
+		}
+		line++
+		if !p.expanded[i] {
+			continue
+		}
+		for j := range d.Tables {
+			if line == p.cursor {
+				return i, j, true
 			}
+			line++
 		}
-		return browseRequestMsg{Database: d.Name, Table: t.Name, PK: pk}
 	}
-	if p.dbIndex < len(p.dbs) {
-		p.toggleDB(p.dbIndex)
-	}
-	return nil
+	return 0, 0, false
 }
 
-// currentDatabase returns the database the cursor is on (or the last selected).
-func (p *schemaPane) currentDatabase() string {
-	if p.dbIndex < len(p.dbs) {
-		return p.dbs[p.dbIndex].Name
+// selectCurrent returns a browseRequestMsg when the cursor is on a table, or
+// toggles the database when it is on a header. Returns nil for an empty tree.
+func (p *schemaPane) selectCurrent() any {
+	if p.treeLen() == 0 {
+		return nil
 	}
-	return ""
+	i, j, onTable := p.current()
+	if !onTable {
+		p.toggleDB(i)
+		return nil
+	}
+	d := p.dbs[i]
+	t := d.Tables[j]
+	var pk []string
+	for _, c := range t.Columns {
+		if c.Key == "PRI" {
+			pk = append(pk, c.Name)
+		}
+	}
+	return browseRequestMsg{Database: d.Name, Table: t.Name, PK: pk}
+}
+
+// currentDatabase returns the database the cursor is on.
+func (p *schemaPane) currentDatabase() string {
+	if p.treeLen() == 0 {
+		return ""
+	}
+	i, _, _ := p.current()
+	return p.dbs[i].Name
 }
 
 func browseQuery(dbName, table string, pk []string) string {
@@ -124,23 +172,41 @@ func quotedList(names []string) string {
 	return strings.Join(q, ", ")
 }
 
+// view renders the tree window [top, top+lines), marking the cursor line.
 func (p *schemaPane) view() string {
 	var b strings.Builder
+	line := 0
+	end := p.treeLen()
+	if p.lines > 0 && p.top+p.lines < end {
+		end = p.top + p.lines
+	}
 	for i, d := range p.dbs {
-		head := "▸"
-		if p.dbIndex == i && !p.onTable {
-			head = "◉"
+		if line >= end {
+			break
 		}
-		fmt.Fprintf(&b, "%s %s (%d)\n", head, d.Name, len(d.Tables))
+		if line >= p.top {
+			mark := "▸ "
+			if line == p.cursor {
+				mark = "◉ "
+			}
+			fmt.Fprintf(&b, "%s%s (%d)\n", mark, d.Name, len(d.Tables))
+		}
+		line++
 		if !p.expanded[i] {
 			continue
 		}
-		for j, t := range d.Tables {
-			mark := "  "
-			if p.onTable && p.dbIndex == i && p.tableIndex == j {
-				mark = "◉ "
+		for _, t := range d.Tables {
+			if line >= end {
+				break
 			}
-			fmt.Fprintf(&b, "%s%s\n", mark, t.Name)
+			if line >= p.top {
+				mark := "  "
+				if line == p.cursor {
+					mark = "◉ "
+				}
+				fmt.Fprintf(&b, "%s%s\n", mark, t.Name)
+			}
+			line++
 		}
 	}
 	return b.String()

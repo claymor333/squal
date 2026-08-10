@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +38,36 @@ func TestAIPanelEscCancels(t *testing.T) {
 	}
 	if p.running {
 		t.Fatal("still running")
+	}
+}
+
+func TestAIPanelModeLabels(t *testing.T) {
+	p := newAIPanel()
+	if !strings.Contains(p.view(), "Ask AI") {
+		t.Fatalf("ask mode label missing: %q", p.view())
+	}
+	p.toggleMode()
+	if !strings.Contains(p.view(), "NL→SQL") {
+		t.Fatalf("quick mode label missing: %q", p.view())
+	}
+}
+
+func TestAIPanelConfirmModal(t *testing.T) {
+	p := newAIPanel()
+	p.pendingConfirm = "run_write"
+	if !strings.Contains(p.view(), "run_write") {
+		t.Fatalf("confirm modal missing tool name: %q", p.view())
+	}
+}
+
+func TestAIPanelTranscriptClipped(t *testing.T) {
+	p := newAIPanel()
+	for i := 0; i < 20; i++ {
+		p.events = append(p.events, aiEventMsg{Tool: "run_query"})
+	}
+	p.SetLines(5)
+	out := p.view()
+	if n := lineCount(out); n > 5 {
+		t.Fatalf("transcript overflowed: %d lines > 5", n)
 	}
 }
