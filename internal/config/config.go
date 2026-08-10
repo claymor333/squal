@@ -95,6 +95,26 @@ func (c *Config) Save() error {
 	return nil
 }
 
+func (c *Config) AddProfile(p Profile) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name == p.Name {
+			c.Profiles[i] = p
+			return
+		}
+	}
+	c.Profiles = append(c.Profiles, p)
+}
+
+func (c *Config) RemoveProfile(name string) {
+	out := c.Profiles[:0]
+	for _, p := range c.Profiles {
+		if p.Name != name {
+			out = append(out, p)
+		}
+	}
+	c.Profiles = out
+}
+
 func (c *Config) APIKey() string {
 	if k := os.Getenv("SQUAL_OPENAI_API_KEY"); k != "" {
 		return k

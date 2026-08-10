@@ -75,6 +75,7 @@ type model struct {
 	conns    []*connData
 	active   int
 	focus    paneFocus
+	connect  *connectView
 	width    int
 	height   int
 	lastErr  error
@@ -210,6 +211,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.connect != nil {
+		return m.handleConnectKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		if m.active >= 0 && m.active < len(m.conns) {
@@ -236,6 +240,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.focus {
 	case focusSchema:
 		switch msg.String() {
+		case "c":
+			m.connect = newConnectView()
 		case "up":
 			if cur.pane != nil {
 				cur.pane.moveUp()
@@ -292,6 +298,46 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// handleConnectKey routes keys while the new-connection modal is open.
+func (m *model) handleConnectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.connect = nil
+		return m, nil
+	case "enter":
+		name := m.connect.value(hostField)
+		if name == "" {
+			name = "conn"
+		}
+		p, ok := m.connect.buildProfile(name)
+		m.connect = nil
+		if !ok {
+			return m, nil
+		}
+		m.cfg.AddProfile(p)
+		if err := m.cfg.Save(); err != nil {
+			m.lastErr = err
+			return m, nil
+		}
+		idx := len(m.conns)
+		m.conns = append(m.conns, &connData{profile: p, loading: true, ed: newEditor()})
+		m.active = idx
+		return m, openConnection(idx, p)
+	case "tab":
+		m.connect.cur = (m.connect.cur + 1) % numConnectFields
+		return m, nil
+	case "shift+tab":
+		m.connect.cur = (m.connect.cur - 1 + numConnectFields) % numConnectFields
+		return m, nil
+	default:
+		runes := []rune(msg.String())
+		if len(runes) == 1 {
+			m.connect.setField(m.connect.cur, m.connect.value(m.connect.cur)+string(runes[0]))
+		}
+		return m, nil
+	}
 }
 
 // --- query pipeline ----------------------------------------------------------
@@ -517,7 +563,7 @@ func (m *model) View() string {
 		errline = styleErr.Render("✗ "+m.lastErr.Error()) + "\n"
 	}
 
-	return stylePane.Render(
+	base := stylePane.Render(
 		tabs + "\n" +
 			sectionHeader("schema", m.focus == focusSchema) + "\n" +
 			body + "\n" +
@@ -528,6 +574,10 @@ func (m *model) View() string {
 			errline +
 			statusView(cur.profile.Name, cur.results, elapsed, rerr, m.focus) + "\n",
 	)
+	if m.connect != nil {
+		return renderConnectModal(m.connect) + "\n" + base
+	}
+	return base
 }
 
 func sectionHeader(label string, focused bool) string {
@@ -535,6 +585,22 @@ func sectionHeader(label string, focused bool) string {
 		return styleAccent.Render("▸ " + label)
 	}
 	return styleDim.Render("  " + label)
+}
+
+var connectFieldLabels = [numConnectFields]string{"host", "port", "user", "pass", "db"}
+
+func renderConnectModal(c *connectView) string {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("new connection") + "\n")
+	for f := connectField(0); f < numConnectFields; f++ {
+		mark := "  "
+		if f == c.cur {
+			mark = "▸ "
+		}
+		fmt.Fprintf(&b, "%s%s: %s\n", mark, connectFieldLabels[f], c.value(f))
+	}
+	b.WriteString(styleDim.Render("enter connect · esc cancel"))
+	return b.String()
 }
 
 func renderSchemaTree(dbs []db.Database) string {
