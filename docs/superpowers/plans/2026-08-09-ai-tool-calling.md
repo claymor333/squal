@@ -122,7 +122,7 @@ func TestCompleteToolsParsesToolCalls(t *testing.T) {
 
 func TestCompleteToolsErrorMeansUnsupported(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"error":{"message":"tools not supported"}}`, http.Status400)
+		http.Error(w, `{"error":{"message":"tools not supported"}}`, http.StatusBadRequest)
 	}))
 	defer srv.Close()
 
