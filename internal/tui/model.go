@@ -43,7 +43,10 @@ type connData struct {
 	ed          *editor
 	wr          *writer
 	results     *resultsView
-	row         *rowPanel // right-side row editor; nil when closed
+	ring        *resultsRing // recent result sets; the active one is cur.results
+	railOpen    bool
+	railTab     paneFocus // focusRow / focusHistory / focusAI
+	row         *rowPanel // rail row-tab content; nil until opened
 	hist        *historyView
 	browse      *browseRequestMsg // table browsed by the current results, for load-next
 	currentDB   string            // database selected in the tree; default schema for unqualified SQL
@@ -132,19 +135,21 @@ func (m *model) wireAI(c *connData, conn *db.Conn) {
 // --- model -------------------------------------------------------------------
 
 type model struct {
-	cfg          *config.Config
-	conns        []*connData
-	active       int
-	focus        paneFocus
-	connect      *connectView
-	ai           *aiPanel
-	store        *state.Store
-	width        int
-	height       int
-	transientErr error // last transient error (config save, store read); cleared on the next key
-	confirm      *confirmModal
-	help         bool
-	quitting     bool
+	cfg           *config.Config
+	conns         []*connData
+	active        int
+	focus         paneFocus
+	connect       *connectView
+	ai            *aiPanel
+	store         *state.Store
+	width         int
+	height        int
+	transientErr  error  // last transient error (config save, store read); cleared on the next key
+	toast         string // transient verdict line ("saved — undoable"); cleared on the next key
+	railCollapsed bool   // left rail folded; the stage takes its width
+	confirm       *confirmModal
+	help          bool
+	quitting      bool
 }
 
 // confirmModal is a y/n prompt overlaying the layout. yes builds the command to
@@ -213,20 +218,54 @@ func (m *model) prevTab() {
 	}
 }
 
-// focusCycle returns the tab order for the active connection. The row and
-// history panes only join the cycle while they are open.
+// focusCycle returns the tab order for the active connection. The context rail
+// joins the cycle only while it is open.
 func (m *model) focusCycle() []paneFocus {
 	cyc := []paneFocus{focusSchema, focusEditor, focusResults}
 	if m.active >= 0 && m.active < len(m.conns) {
-		cur := m.conns[m.active]
-		if cur.row != nil {
-			cyc = append(cyc, focusRow)
-		}
-		if cur.hist != nil {
-			cyc = append(cyc, focusHistory)
+		if cur := m.conns[m.active]; cur.railOpen {
+			cyc = append(cyc, focusRail)
 		}
 	}
-	return append(cyc, focusAI)
+	return cyc
+}
+
+// activateRail opens the context rail and selects a tab, lazily creating the
+// tab's content. Activating hist fires a store.List the first time.
+func (m *model) activateRail(cur *connData, tab paneFocus) tea.Cmd {
+	cur.railOpen = true
+	cur.railTab = tab
+	switch tab {
+	case focusRow:
+		if cur.row == nil && cur.results != nil && cur.browse != nil && len(cur.results.order) > 0 {
+			idx := cur.results.order[cur.results.top+cur.results.selRow]
+			p := newRowPanel()
+			p.SetRow(rowAt(cur.results, idx))
+			cur.row = p
+		}
+	case focusHistory:
+		if m.store != nil && cur.hist == nil {
+			cur.hist = newHistoryView(nil)
+			return m.loadHistory(cur)
+		}
+	}
+	return nil
+}
+
+// setRailTabByX maps a click on the rail's tab strip to a tab.
+func (m *model) setRailTabByX(x int, rail rect) {
+	if m.active < 0 || m.active >= len(m.conns) {
+		return
+	}
+	cur := m.conns[m.active]
+	w := rail.W / 3
+	tab := focusRow
+	if x >= rail.X+w*2 {
+		tab = focusAI
+	} else if x >= rail.X+w {
+		tab = focusHistory
+	}
+	m.activateRail(cur, tab)
 }
 
 // nextFocus advances the key focus through the open panes in tab order.
@@ -334,6 +373,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case aiEventMsg:
 		if m.ai != nil {
+			// first tool activity opens the ai rail tab so the user can watch
+			if len(m.ai.events) == 0 && m.active >= 0 && m.active < len(m.conns) {
+				m.conns[m.active].railOpen = true
+				m.conns[m.active].railTab = focusAI
+			}
 			m.ai.events = append(m.ai.events, msg)
 		}
 		return m, nil
@@ -386,9 +430,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cur.results != nil && msg.OrigIdx >= 0 && msg.After != nil {
 			patchRow(cur.results, msg.OrigIdx, msg.After)
 		}
+		// verdict toast + auto-open the history rail tab
+		if msg.Deleted {
+			m.toast = "deleted — undoable"
+		} else {
+			m.toast = "saved — undoable"
+		}
 		cur.row = nil
-		if m.focus == focusRow {
-			m.focus = focusResults
+		if m.focus == focusRail && cur.railTab == focusRow {
+			cur.railTab = focusHistory
+		}
+		if cur.hist == nil && m.store != nil {
+			cur.hist = newHistoryView(nil)
+			return m, m.loadHistory(cur)
 		}
 		return m, nil
 
@@ -416,6 +470,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transientErr = msg.Err
 			return m, nil
 		}
+		m.toast = "undo done"
 		var cmds []tea.Cmd
 		if m.store != nil {
 			cmds = append(cmds, func() tea.Msg {
@@ -486,6 +541,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.transientErr = nil // the status error slot is one-shot; any key clears it
+	m.toast = ""         // verdicts are transient too
 	switch msg.String() {
 	case "ctrl+c":
 		// immediately exit; never just drop a tab (that is q/ctrl+d's job)
@@ -499,7 +555,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.help = true
 		return m, nil
 	case "?":
-		if m.focus == focusEditor || m.focus == focusAI || m.focus == focusRow {
+		if m.focus == focusEditor || m.focus == focusRail {
 			break // '?' is SQL/input text in these panes; use F1 for help
 		}
 		m.help = true
@@ -510,11 +566,37 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.focus = m.prevFocus()
 		return m, nil
+	case "L":
+		m.railCollapsed = !m.railCollapsed
+		return m, nil
 	case "u":
-		return m, m.toggleHistory(m.conns[m.active])
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		m.focus = focusRail
+		return m, m.activateRail(m.conns[m.active], focusHistory)
+	case "1":
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		m.focus = focusRail
+		return m, m.activateRail(m.conns[m.active], focusRow)
+	case "2":
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		m.focus = focusRail
+		return m, m.activateRail(m.conns[m.active], focusHistory)
+	case "3":
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		m.focus = focusRail
+		return m, m.activateRail(m.conns[m.active], focusAI)
 	case "q":
-		if m.focus == focusEditor || m.focus == focusAI || m.focus == focusRow || m.focus == focusHistory || m.active < 0 || m.active >= len(m.conns) {
-			break // 'q' is text input in the editor/AI panel; ignore it elsewhere
+		text := m.focus == focusEditor || (m.focus == focusRail && m.railIsText())
+		if text || m.active < 0 || m.active >= len(m.conns) {
+			break // 'q' is text input in these panes; ignore it elsewhere
 		}
 		cur := m.conns[m.active]
 		m.confirm = &confirmModal{
@@ -535,6 +617,18 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "c":
 			m.connect = newConnectView()
+		case "/":
+			if cur.pane != nil {
+				cur.pane.startFilter()
+			}
+		case "esc":
+			if cur.pane != nil {
+				cur.pane.endFilter()
+			}
+		case "x":
+			if cur.pane != nil {
+				cur.pane.toggleTable()
+			}
 		case "up":
 			if cur.pane != nil {
 				cur.pane.moveUp()
@@ -555,6 +649,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						return m, m.startFetch(context.Background(), rq.SQL)
 					}
 				}
+			}
+		default:
+			runes := []rune(msg.String())
+			if cur.pane != nil && cur.pane.filterMode && len(runes) == 1 {
+				cur.pane.appendFilter(runes[0])
 			}
 		}
 	case focusEditor:
@@ -641,15 +740,28 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "n":
 			return m, m.loadNext(cur)
+		case "[":
+			if cur.ring != nil && cur.ring.len() > 1 {
+				cur.ring.prev()
+				cur.results = cur.ring.cur()
+			}
+		case "]":
+			if cur.ring != nil && cur.ring.len() > 1 {
+				cur.ring.next()
+				cur.results = cur.ring.cur()
+			}
 		case "enter", "o":
 			if cur.browse != nil && r != nil && len(r.order) > 0 {
-				idx := r.order[r.top+r.selRow]
-				p := newRowPanel()
-				p.SetRow(rowAt(r, idx))
-				cur.row = p
-				m.focus = focusRow
+				m.focus = focusRail
+				return m, m.activateRail(cur, focusRow)
 			}
 		case "delete":
+			// drop the ring grid when several exist; otherwise delete the row
+			if cur.ring != nil && cur.ring.len() > 1 {
+				cur.ring.drop()
+				cur.results = cur.ring.cur()
+				break
+			}
 			if cur.browse != nil && r != nil && len(r.order) > 0 {
 				idx := r.order[r.top+r.selRow]
 				row := rowAt(r, idx)
@@ -667,117 +779,148 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				r.appendFilter(runes[0])
 			}
 		}
-	case focusRow:
-		if cur.row == nil {
+	case focusRail:
+		if !cur.railOpen {
 			break
 		}
-		p := cur.row
-		switch {
-		case p.editing:
-			switch msg.String() {
-			case "enter":
-				p.commitEdit()
-			case "backspace":
-				p.backspaceEdit()
-			case "esc":
-				p.cancelEdit()
-			default:
-				runes := []rune(msg.String())
-				if len(runes) == 1 {
-					p.appendEdit(runes[0])
-				}
-			}
-		case p.raw:
-			switch msg.String() {
-			case "esc", "enter":
-				p.toggleRaw()
-			case "backspace":
-				if len(p.rawBuf) > 0 {
-					p.rawBuf = p.rawBuf[:len(p.rawBuf)-1]
-				}
-			default:
-				runes := []rune(msg.String())
-				if len(runes) == 1 {
-					p.rawBuf += string(runes[0])
-				}
-			}
-		default:
-			switch msg.String() {
-			case "up":
-				p.moveUp()
-			case "down":
-				p.moveDown()
-			case "enter":
-				p.startEdit()
-			case "esc":
-				cur.row = nil
-				m.focus = focusResults
-			case "r":
-				p.toggleRaw()
-			case "ctrl+s", "s":
-				r := cur.results
-				if r == nil || cur.browse == nil || len(r.order) == 0 {
-					break
-				}
-				idx := r.order[r.top+r.selRow]
-				b := *cur.browse
-				before := rowAt(r, idx)
-				return m, func() tea.Msg {
-					after, err := p.Values()
-					if err != nil {
-						return rowWriteDoneMsg{Err: err}
-					}
-					return saveRowMsg{Before: before, After: after, PK: b.PK, OrigIdx: idx}
-				}
-			}
-		}
-	case focusHistory:
-		if cur.hist == nil {
-			break
-		}
+		// rail-level keys work on any tab
 		switch msg.String() {
-		case "up":
-			cur.hist.moveUp()
-		case "down":
-			cur.hist.moveDown()
-		case "enter":
-			if ua, ok := cur.hist.selectRow().(undoActionMsg); ok {
-				return m, m.doUndo(cur, ua.ID)
-			}
+		case "1":
+			return m, m.activateRail(cur, focusRow)
+		case "2":
+			return m, m.activateRail(cur, focusHistory)
+		case "3":
+			return m, m.activateRail(cur, focusAI)
 		case "esc":
-			cur.hist = nil
+			cur.railOpen = false
 			m.focus = focusResults
+			return m, nil
 		}
-	case focusAI:
-		if m.ai == nil {
-			break
+		switch cur.railTab {
+		case focusRow:
+			return m, m.railRowKey(cur, msg)
+		case focusHistory:
+			return m, m.railHistKey(cur, msg)
+		case focusAI:
+			return m, m.railAIKey(msg)
 		}
+	}
+	return m, nil
+}
+
+// railRowKey routes keys on the row-editing rail tab.
+func (m *model) railRowKey(cur *connData, msg tea.KeyMsg) tea.Cmd {
+	p := cur.row
+	if p == nil {
+		return nil
+	}
+	switch {
+	case p.editing:
 		switch msg.String() {
-		case "a":
-			m.ai.toggleMode()
-		case "esc":
-			m.ai.interrupt()
 		case "enter":
-			if m.ai.mode == modeAsk {
-				return m, m.ai.runAsk(context.Background())
+			p.commitEdit()
+		case "backspace":
+			p.backspaceEdit()
+		case "esc":
+			p.cancelEdit()
+		default:
+			runes := []rune(msg.String())
+			if len(runes) == 1 {
+				p.appendEdit(runes[0])
 			}
-			return m, m.ai.runQuick(context.Background())
-		case "y":
-			if m.ai.pendingConfirm != "" {
-				m.ai.confirm(true)
-			}
-		case "n":
-			if m.ai.pendingConfirm != "" {
-				m.ai.confirm(false)
+		}
+	case p.raw:
+		switch msg.String() {
+		case "esc", "enter":
+			p.toggleRaw()
+		case "backspace":
+			if len(p.rawBuf) > 0 {
+				p.rawBuf = p.rawBuf[:len(p.rawBuf)-1]
 			}
 		default:
 			runes := []rune(msg.String())
 			if len(runes) == 1 {
-				m.ai.request += string(runes[0])
+				p.rawBuf += string(runes[0])
+			}
+		}
+	default:
+		switch msg.String() {
+		case "up":
+			p.moveUp()
+		case "down":
+			p.moveDown()
+		case "enter":
+			p.startEdit()
+		case "r":
+			p.toggleRaw()
+		case "ctrl+s", "s":
+			r := cur.results
+			if r == nil || cur.browse == nil || len(r.order) == 0 {
+				break
+			}
+			idx := r.order[r.top+r.selRow]
+			b := *cur.browse
+			before := rowAt(r, idx)
+			return func() tea.Msg {
+				after, err := p.Values()
+				if err != nil {
+					return rowWriteDoneMsg{Err: err}
+				}
+				return saveRowMsg{Before: before, After: after, PK: b.PK, OrigIdx: idx}
 			}
 		}
 	}
-	return m, nil
+	return nil
+}
+
+// railHistKey routes keys on the history rail tab.
+func (m *model) railHistKey(cur *connData, msg tea.KeyMsg) tea.Cmd {
+	if cur.hist == nil {
+		return nil
+	}
+	switch msg.String() {
+	case "up":
+		cur.hist.moveUp()
+	case "down":
+		cur.hist.moveDown()
+	case "enter":
+		if ua, ok := cur.hist.selectRow().(undoActionMsg); ok {
+			return m.doUndo(cur, ua.ID)
+		}
+	}
+	return nil
+}
+
+// railAIKey routes keys on the AI rail tab.
+func (m *model) railAIKey(msg tea.KeyMsg) tea.Cmd {
+	if m.ai == nil {
+		return nil
+	}
+	switch msg.String() {
+	case "a":
+		m.ai.toggleMode()
+	case "esc":
+		m.ai.interrupt()
+	case "enter":
+		if m.ai.mode == modeAsk {
+			return m.ai.runAsk(context.Background())
+		}
+		return m.ai.runQuick(context.Background())
+	case "y":
+		if m.ai.pendingConfirm != "" {
+			m.ai.confirm(true)
+		}
+	case "n":
+		if m.ai.pendingConfirm != "" {
+			m.ai.confirm(false)
+		}
+	default:
+		runes := []rune(msg.String())
+		if len(runes) == 1 {
+			m.ai.request += string(runes[0])
+		}
+	}
+	return nil
 }
 
 // handleConnectKey routes keys while the new-connection modal is open.
@@ -823,25 +966,29 @@ func (m *model) handleConnectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// toggleHistory opens or closes the action-history panel. Opening kicks off a
-// store.List so the panel fills asynchronously.
-func (m *model) toggleHistory(cur *connData) tea.Cmd {
+// loadHistory kicks off a store.List so the history rail tab fills
+// asynchronously on first activation.
+func (m *model) loadHistory(cur *connData) tea.Cmd {
 	if m.store == nil {
 		return nil
 	}
-	if cur.hist != nil {
-		cur.hist = nil
-		if m.focus == focusHistory {
-			m.focus = focusResults
-		}
-		return nil
-	}
-	cur.hist = newHistoryView(nil)
-	m.focus = focusHistory
 	return func() tea.Msg {
 		rows, err := m.store.List(50)
 		return historyLoadedMsg{Rows: rows, Err: err}
 	}
+}
+
+// railIsText reports whether the active rail tab accepts text input (the AI
+// request line, or a row field being edited/raw), so q/? don't hijack it.
+func (m *model) railIsText() bool {
+	cur := m.conns[m.active]
+	switch cur.railTab {
+	case focusAI:
+		return true
+	case focusRow:
+		return cur.row != nil && (cur.row.editing || cur.row.raw)
+	}
+	return false
 }
 
 // doUndo restores an action from the log via RowEditor.Undo, marks it Undone,
@@ -897,6 +1044,13 @@ func (m *model) startFetch(ctx context.Context, sql string) tea.Cmd {
 		return func() tea.Msg { return queryDoneMsg{Err: err} }
 	}
 	cur.job = &fetchJob{col: col, ch: ch, sql: sql}
+	if cur.results != nil && cur.results.done {
+		// park the finished grid on the ring instead of losing it
+		if cur.ring == nil {
+			cur.ring = newResultsRing()
+		}
+		cur.ring.push(cur.results)
+	}
 	cur.results = newResultsView(col)
 	cur.results.loading = true
 	cur.queryStart = time.Now()
@@ -1056,53 +1210,58 @@ func (m *model) View() string {
 	}
 
 	cur := m.conns[m.active]
-	rs := newLayout().rects(m.width, m.height, m.focus, cur.row != nil, cur.hist != nil)
+	footerH := 1
+	if m.toast != "" {
+		footerH = 2
+	}
+	rs := newLayout().rects(m.width, m.height, m.focus, cur.railOpen, m.railCollapsed, footerH)
 
 	var out strings.Builder
-	out.WriteString(fit(renderTabs(m.conns, m.active), rs.tabs.W, rs.tabs.H))
+	out.WriteString(fit(renderTabs(m.conns, m.active), rs.tabs.W, rs.tabs.H) + "\n")
 
-	schemaBody := renderSchemaTree(cur.dbs)
-	switch {
-	case cur.loading:
-		schemaBody = styleDim.Render("connecting to " + cur.profile.Name + "…")
-	case cur.loadErr != nil:
-		schemaBody = styleErr.Render("connection failed: " + cur.loadErr.Error())
-	case cur.pane != nil:
-		cur.pane.SetLines(rs.schema.H - 3) // title + borders
-		schemaBody = cur.pane.view()
+	var body strings.Builder
+	if !m.railCollapsed {
+		schemaBody := renderSchemaTree(cur.dbs)
+		switch {
+		case cur.loading:
+			schemaBody = styleDim.Render("connecting to " + cur.profile.Name + "…")
+		case cur.loadErr != nil:
+			schemaBody = styleErr.Render("connection failed: " + cur.loadErr.Error())
+		case cur.pane != nil:
+			cur.pane.SetLines(rs.schema.H - 3) // title + borders
+			schemaBody = cur.pane.view()
+		}
+		body.WriteString(paneBox("schema", m.focus == focusSchema, schemaBody, rs.schema.W, rs.schema.H))
 	}
-	schemaBox := paneBox("schema", m.focus == focusSchema, schemaBody, rs.schema.W, rs.schema.H)
 
 	editorBody := styleDim.Render("(empty)")
+	edTitle := "editor"
 	if cur.ed != nil {
 		cur.ed.SetViewport(rs.editor.W-2, rs.editor.H-2)
 		editorBody = cur.ed.view()
+		edTitle = cur.ed.title(cur.currentDB)
 	}
 	resultsBody := styleDim.Render("(no query)")
 	if cur.results != nil {
 		cur.results.SetViewport(rs.results.H - 4) // title + borders + column header
 		resultsBody = cur.results.view(rs.results.W - 2)
 	}
-	aiBody := renderAI(m.ai)
-	if m.ai != nil {
-		m.ai.SetLines(rs.ai.H - 3)
-	}
 
-	// Right column: editor, results, [history], ai stacked, with the row panel
-	// as a right-hand strip when open.
-	var right []string
-	right = append(right, paneBox("editor", m.focus == focusEditor, editorBody, rs.editor.W, rs.editor.H))
-	right = append(right, paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H))
-	if cur.hist != nil {
-		right = append(right, paneBox("history", m.focus == focusHistory, cur.hist.view(), rs.hist.W, rs.hist.H))
-	}
-	right = append(right, paneBox("ai", m.focus == focusAI, aiBody, rs.ai.W, rs.ai.H))
+	// Stage: editor + results stacked.
+	rightCol := lipgloss.JoinVertical(lipgloss.Left,
+		paneBox(edTitle, m.focus == focusEditor, editorBody, rs.editor.W, rs.editor.H),
+		paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H),
+	)
 
-	rightCol := lipgloss.JoinVertical(lipgloss.Left, right...)
-	if cur.row != nil {
-		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, rightCol, paneBox("row", m.focus == focusRow, cur.row.view(), rs.row.W, rs.row.H))
+	// Context rail: tab strip + active tab body.
+	if cur.railOpen {
+		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, rightCol, m.railBox(cur, rs.rail))
 	}
-	out.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, schemaBox, rightCol))
+	if !m.railCollapsed {
+		out.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, body.String(), rightCol))
+	} else {
+		out.WriteString(rightCol)
+	}
 
 	var elapsed string
 	if cur.results != nil && cur.job != nil {
@@ -1122,10 +1281,15 @@ func (m *model) View() string {
 	if statusErr == nil {
 		statusErr = m.transientErr
 	}
+	var footer strings.Builder
 	if m.confirm != nil {
-		out.WriteString(fit(m.confirm.view(), rs.status.W, rs.status.H))
+		footer.WriteString(fit(m.confirm.view(), rs.status.W, rs.status.H))
 	} else {
-		out.WriteString(fit(statusView(statusInfo{
+		if m.toast != "" {
+			footer.WriteString(toastLine(m.toast, rs.toast.W))
+			footer.WriteString("\n")
+		}
+		footer.WriteString(fit(statusView(statusInfo{
 			Conn:    cur.profile.Name,
 			Results: cur.results,
 			Elapsed: elapsed,
@@ -1133,6 +1297,8 @@ func (m *model) View() string {
 			Focus:   m.focus,
 		}), rs.status.W, rs.status.H))
 	}
+	out.WriteString("\n")
+	out.WriteString(footer.String())
 
 	base := out.String()
 	if m.help {
@@ -1147,6 +1313,52 @@ func (m *model) View() string {
 		return renderConnectModal(m.connect) + "\n" + base
 	}
 	return base
+}
+
+// railBox renders the context rail: a tab strip (row | hist | ai) over the
+// active tab's body.
+func (m *model) railBox(cur *connData, rail rect) string {
+	tabs := " " + railTabLabel(focusRow, cur.railTab) +
+		" " + railTabLabel(focusHistory, cur.railTab) +
+		" " + railTabLabel(focusAI, cur.railTab)
+	var body string
+	switch cur.railTab {
+	case focusRow:
+		if cur.row != nil {
+			body = cur.row.view()
+		} else {
+			body = styleDim.Render("no row selected — enter a row first")
+		}
+	case focusHistory:
+		if cur.hist != nil {
+			body = cur.hist.view()
+		} else {
+			body = styleDim.Render("(history loading…)")
+		}
+	case focusAI:
+		if m.ai != nil {
+			m.ai.SetLines(rail.H - 4) // tab strip + borders
+			body = renderAI(m.ai)
+		} else {
+			body = styleDim.Render("(ai panel unconfigured)")
+		}
+	}
+	return paneBox("rail", m.focus == focusRail, tabs+"\n"+body, rail.W, rail.H)
+}
+
+// railTabLabel renders a rail tab, highlighted when active.
+func railTabLabel(tab, active paneFocus) string {
+	label := "row"
+	switch tab {
+	case focusHistory:
+		label = "hist"
+	case focusAI:
+		label = "ai"
+	}
+	if tab == active {
+		return styleAccent.Render("[" + label + "]")
+	}
+	return styleDim.Render(label)
 }
 
 // renderTabs draws the connection tabs, highlighting the active one.

@@ -104,16 +104,17 @@ func TestRowPanelOpensViaEnter(t *testing.T) {
 	m := browseRowModel(t)
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	cur := m.conns[0]
-	if cur.row == nil {
-		t.Fatal("enter on a browsed row should open the row panel")
+	if cur.row == nil || !cur.railOpen || cur.railTab != focusRow {
+		t.Fatalf("enter on a browsed row should open the row rail tab: row=%v rail=%v/%v",
+			cur.row != nil, cur.railOpen, cur.railTab)
 	}
-	if m.focus != focusRow {
-		t.Fatalf("focus = %v, want row", m.focus)
+	if m.focus != focusRail {
+		t.Fatalf("focus = %v, want rail", m.focus)
 	}
-	// esc closes it
+	// esc closes the rail
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
-	if cur.row != nil {
-		t.Fatal("esc should close the row panel")
+	if cur.railOpen {
+		t.Fatal("esc should close the rail")
 	}
 }
 

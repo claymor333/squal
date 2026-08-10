@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -96,6 +97,43 @@ func TestResultsViewTruncatesToWidth(t *testing.T) {
 		if len([]rune(ln)) > 20 {
 			t.Fatalf("line exceeds 20 cells: %q", ln)
 		}
+	}
+}
+
+func TestRingPushFlipDrop(t *testing.T) {
+	r := newResultsRing()
+	r.push(newResultsView(colsData()))
+	r.push(newResultsView(&db.Columnar{Columns: []string{"x"}, Cols: [][]string{{"1"}}, Rows: 1}))
+	if r.len() != 2 {
+		t.Fatalf("len = %d, want 2", r.len())
+	}
+	before := r.cur()
+	r.next()
+	if r.cur() == before {
+		t.Fatal("next() should move the cursor")
+	}
+	r.next()
+	if r.cur() != before {
+		t.Fatal("next() past the end should wrap")
+	}
+	r.prev()
+	r.prev()
+	if r.cur() != before {
+		t.Fatal("prev() past the start should wrap")
+	}
+	r.drop()
+	if r.len() != 1 {
+		t.Fatalf("after drop len = %d, want 1", r.len())
+	}
+}
+
+func TestRingCapEvictsOldest(t *testing.T) {
+	r := newResultsRing()
+	for i := 0; i < ringCap+2; i++ {
+		r.push(newResultsView(&db.Columnar{Columns: []string{"x"}, Cols: [][]string{{fmt.Sprint(i)}}, Rows: 1}))
+	}
+	if r.len() != ringCap {
+		t.Fatalf("len = %d, want cap %d", r.len(), ringCap)
 	}
 }
 

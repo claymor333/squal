@@ -199,10 +199,10 @@ func TestHistoryToggleLoadsActions(t *testing.T) {
 
 	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
 	if cmd == nil || cur.hist == nil {
-		t.Fatal("u should open the history panel and dispatch a load")
+		t.Fatal("u should open the history tab and dispatch a load")
 	}
-	if m.focus != focusHistory {
-		t.Fatalf("focus = %v, want history", m.focus)
+	if m.focus != focusRail || cur.railTab != focusHistory {
+		t.Fatalf("focus = %v railTab = %v, want rail/history", m.focus, cur.railTab)
 	}
 	msg := cmd()
 	hl, ok := msg.(historyLoadedMsg)
@@ -213,10 +213,10 @@ func TestHistoryToggleLoadsActions(t *testing.T) {
 	if len(cur.hist.rows) != 1 || cur.hist.rows[0].ID != "a1" {
 		t.Fatalf("history rows = %+v", cur.hist.rows)
 	}
-	// esc closes
+	// esc closes the rail
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
-	if cur.hist != nil {
-		t.Fatal("esc should close history")
+	if cur.railOpen {
+		t.Fatal("esc should close the rail")
 	}
 }
 
@@ -326,6 +326,62 @@ func TestTransientErrorClearedOnKey(t *testing.T) {
 	}
 }
 
+func TestRailTabSwitch(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	cur.hist = newHistoryView(nil)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if !cur.railOpen || cur.railTab != focusHistory {
+		t.Fatalf("rail = %v/%v, want open on hist", cur.railOpen, cur.railTab)
+	}
+	if m.focus != focusRail {
+		t.Fatalf("focus = %v, want rail", m.focus)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	if cur.railTab != focusAI {
+		t.Fatalf("railTab = %v, want ai", cur.railTab)
+	}
+}
+
+func TestRingFlipKeys(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	cur.ring = newResultsRing()
+	cur.ring.push(newResultsView(colsData()))
+	cur.ring.push(newResultsView(&db.Columnar{Columns: []string{"x"}, Cols: [][]string{{"1"}}, Rows: 1}))
+	cur.results = cur.ring.cur()
+	m.focus = focusResults
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if cur.results.data.Columns[0] == "x" {
+		t.Fatalf("] should leave the newest grid: %v", cur.results.data.Columns)
+	}
+}
+
+func TestRailCollapseToggles(t *testing.T) {
+	m := newModelForTest(1)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	if !m.railCollapsed {
+		t.Fatal("L should collapse the left rail")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	if m.railCollapsed {
+		t.Fatal("L again should restore the left rail")
+	}
+}
+
+func TestToastSetAndCleared(t *testing.T) {
+	m := newModelForTest(1)
+	m.width, m.height = 80, 20
+	m.toast = "saved — undoable"
+	if !strings.Contains(m.View(), "saved — undoable") {
+		t.Fatal("toast should render in the footer")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.toast != "" {
+		t.Fatal("any key should clear the toast")
+	}
+}
+
 // TestViewNeverOverflows renders every pane (a large expanded schema tree, a
 // loaded results grid) into a small window and asserts the output fits.
 func TestViewNeverOverflows(t *testing.T) {
@@ -352,7 +408,7 @@ func TestViewNeverOverflows(t *testing.T) {
 	if lineCount(out) > m.height {
 		t.Fatalf("View overflowed: %d lines > %d", lineCount(out), m.height)
 	}
-	for _, want := range []string{"schema", "editor", "results", "ai"} {
+	for _, want := range []string{"schema", "editor", "results"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("View missing pane title %q", want)
 		}

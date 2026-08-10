@@ -214,6 +214,65 @@ func truncate(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
+// ringCap bounds how many result sets a connection keeps in the ring.
+const ringCap = 8
+
+// resultsRing holds the recent result sets for one connection. Each grid keeps
+// its own sort/filter/scroll, so flipping through the ring preserves context.
+type resultsRing struct {
+	grids []*resultsView
+	idx   int
+}
+
+func newResultsRing() *resultsRing {
+	return &resultsRing{}
+}
+
+func (r *resultsRing) len() int { return len(r.grids) }
+
+func (r *resultsRing) cur() *resultsView {
+	if len(r.grids) == 0 {
+		return nil
+	}
+	return r.grids[r.idx]
+}
+
+// push stages a new result set as the active grid, evicting the oldest past the
+// cap.
+func (r *resultsRing) push(v *resultsView) {
+	r.grids = append(r.grids, v)
+	r.idx = len(r.grids) - 1
+	if len(r.grids) > ringCap {
+		r.grids = r.grids[len(r.grids)-ringCap:]
+		r.idx = len(r.grids) - 1
+	}
+}
+
+func (r *resultsRing) next() {
+	if len(r.grids) == 0 {
+		return
+	}
+	r.idx = (r.idx + 1) % len(r.grids)
+}
+
+func (r *resultsRing) prev() {
+	if len(r.grids) == 0 {
+		return
+	}
+	r.idx = (r.idx - 1 + len(r.grids)) % len(r.grids)
+}
+
+// drop removes the active grid and moves the cursor to its neighbour.
+func (r *resultsRing) drop() {
+	if len(r.grids) == 0 {
+		return
+	}
+	r.grids = append(r.grids[:r.idx], r.grids[r.idx+1:]...)
+	if r.idx >= len(r.grids) {
+		r.idx = len(r.grids) - 1
+	}
+}
+
 func (r *resultsView) rebuildOrder() {
 	if r.data == nil {
 		return

@@ -17,16 +17,15 @@ func (r rect) contains(x, y int) bool {
 	return x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H
 }
 
-// rects is the per-surface geometry for one frame. row and hist are zero rects
-// while their panels are closed.
+// rects is the per-surface geometry for one frame. rail is a zero rect while
+// the context rail is closed; toast is a zero rect when no toast line is shown.
 type rects struct {
 	tabs    rect
 	schema  rect
 	editor  rect
 	results rect
-	hist    rect
-	ai      rect
-	row     rect
+	rail    rect
+	toast   rect
 	status  rect
 }
 
@@ -53,22 +52,26 @@ func lineCount(s string) int {
 }
 
 // rects computes pane bounds for a w×h window with the given focus, whether the
-// row panel is open, and whether the history panel is open. Row 0 is the tab
-// bar and the last row is the status bar. The body between them is horizontal:
-// the schema tree is a left column (wider when focused), and the editor,
-// results, history, and AI panes stack in the right column. Every pane keeps at
-// least one body row so a tiny window never collapses a surface; the results
-// floor of 8 degrades to whatever space remains. The history panel carves a
-// third out of the results band when open; the row panel is a right-hand strip
-// of the whole right column.
-func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects {
+// context rail is open, whether the left rail is collapsed, and how many footer
+// rows are in use (1 normally, 2 while a toast is active). Row 0 is the tab bar
+// and the last footerH rows are the footer. The body between them is
+// horizontal: the schema tree is a left column (wider when focused), the editor
+// and results stack in the stage column, and the context rail (row/hist/ai
+// tabs) is a right-hand strip of the stage's full height. Collapsing the left
+// rail gives its width back to the stage. Every pane keeps at least one body
+// row so a tiny window never collapses a surface; the results floor of 8
+// degrades to whatever space remains.
+func (l *layout) rects(w, h int, focus paneFocus, railOpen, railCollapsed bool, footerH int) rects {
 	if w < 1 {
 		w = 1
 	}
-	if h < 3 {
-		h = 3 // tab bar + status + one body row
+	if h < footerH+2 {
+		h = footerH + 2 // tab bar + footer + one body row
 	}
-	bodyH := h - 2
+	if footerH < 1 {
+		footerH = 1
+	}
+	bodyH := h - 1 - footerH
 
 	schemaW := w * 22 / 100
 	if focus == focusSchema {
@@ -79,6 +82,9 @@ func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects 
 	}
 	if schemaW > w/2 {
 		schemaW = w / 2
+	}
+	if railCollapsed {
+		schemaW = 0
 	}
 
 	edH := 1
@@ -91,33 +97,7 @@ func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects 
 			edH = 1
 		}
 	}
-
-	aiH := 1
-	if focus == focusAI {
-		aiH = bodyH / 4
-		if aiH > 6 {
-			aiH = 6
-		}
-		if aiH < 1 {
-			aiH = 1
-		}
-	}
-
-	resH := bodyH - edH - aiH
-	if resH < 1 {
-		resH = 1
-	}
-	histH := 0
-	if histOpen {
-		histH = resH / 3
-		if histH > resH-1 {
-			histH = resH - 1
-		}
-		if histH < 0 {
-			histH = 0
-		}
-	}
-	resH -= histH
+	resH := bodyH - edH
 	if resH < 1 {
 		resH = 1
 	}
@@ -130,18 +110,13 @@ func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects 
 		status: rect{X: 0, Y: h - 1, W: w, H: 1},
 		schema: rect{X: 0, Y: 1, W: schemaW, H: bodyH},
 	}
-	top := 1
-	rs.editor = rect{X: rightX, Y: top, W: rightW, H: edH}
-	top += edH
-	rs.results = rect{X: rightX, Y: top, W: rightW, H: resH}
-	top += resH
-	if histH > 0 {
-		rs.hist = rect{X: rightX, Y: top, W: rightW, H: histH}
-		top += histH
+	if footerH > 1 {
+		rs.toast = rect{X: 0, Y: h - 2, W: w, H: 1}
 	}
-	rs.ai = rect{X: rightX, Y: top, W: rightW, H: aiH}
+	rs.editor = rect{X: rightX, Y: 1, W: rightW, H: edH}
+	rs.results = rect{X: rightX, Y: 1 + edH, W: rightW, H: resH}
 
-	if rowOpen {
+	if railOpen {
 		rw := rightW / 3
 		if rw < 15 {
 			rw = 15
@@ -149,11 +124,9 @@ func (l *layout) rects(w, h int, focus paneFocus, rowOpen, histOpen bool) rects 
 		if rw > rightW-1 {
 			rw = rightW - 1
 		}
-		rs.row = rect{X: rightX + rightW - rw, Y: rs.editor.Y, W: rw, H: bodyH - rs.editor.Y + 1}
+		rs.rail = rect{X: rightX + rightW - rw, Y: 1, W: rw, H: bodyH}
 		rs.editor.W = rightW - rw
 		rs.results.W = rightW - rw
-		rs.hist.W = rightW - rw
-		rs.ai.W = rightW - rw
 	}
 	return rs
 }
@@ -203,8 +176,16 @@ func fit(s string, w, h int) string {
 // focused border is the accent color; idle borders are dim. The title line is
 // the first content line. lipgloss Width pads but never truncates (it wraps),
 // so the body is height-clipped here and MaxWidth-truncated before the border
-// pads — otherwise a long line would grow the box past its rect.
+// pads — otherwise a long line would grow the box past its rect. A rect too
+// short for a border (h < 3) renders a bare title line instead.
 func paneBox(title string, focused bool, body string, w, h int) string {
+	if h < 3 {
+		head := "  " + title
+		if focused {
+			head = styleAccent.Render("▸ " + title)
+		}
+		return fit(head, w, h)
+	}
 	innerW, innerH := w-2, h-2
 	if innerW < 1 {
 		innerW = 1
@@ -223,7 +204,8 @@ func paneBox(title string, focused bool, body string, w, h int) string {
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styleDim.GetForeground()).
-		Width(innerW)
+		Width(innerW).
+		Height(innerH) // pad the box to the rect so it never shrinks below h
 	if focused {
 		style = style.BorderForeground(styleAccent.GetForeground())
 	}

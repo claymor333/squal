@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -23,6 +24,20 @@ type statusInfo struct {
 	Elapsed string
 	Err     error
 	Focus   paneFocus
+}
+
+// toastLine renders a transient, single-line notice (a write verdict like
+// "saved — undoable", a delete, or an error) clipped to the window width. It is
+// the footer's second row when a toast is active.
+func toastLine(t string, w int) string {
+	if t == "" {
+		return ""
+	}
+	style := styleAccent
+	if strings.Contains(t, "✗") {
+		style = styleErr
+	}
+	return fit(style.Render(t), w, 1)
 }
 
 // statusView renders the one-line footer: conn | rows | elapsed on the left,
@@ -49,11 +64,13 @@ func statusView(s statusInfo) string {
 	case focusResults:
 		keys = "↑↓ move · ←→ col · s sort · f filter · n next · enter/o row · tab focus"
 	case focusRow:
-		keys = "↑↓ field · enter edit · r raw · s save · esc close"
+		keys = "↑↓ field · enter edit · r raw · s save · 1/2/3 tab"
 	case focusHistory:
-		keys = "↑↓ move · enter undo · esc close"
+		keys = "↑↓ move · enter undo · 1/2/3 tab · esc close"
 	case focusAI:
-		keys = "type · enter run · a mode · esc interrupt"
+		keys = "type · enter run · a mode · esc interrupt · 1/2/3 tab"
+	case focusRail:
+		keys = "1/2/3 tab · esc close"
 	}
 	return styleStatus.Render(label + " | " + keys)
 }

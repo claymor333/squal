@@ -13,15 +13,16 @@ import (
 func renderHelp(focus paneFocus, w, h int) string {
 	rows := [][2]string{
 		{"tab / shift+tab", "cycle panes"},
-		{"? / esc", "open / close help"},
-		{"ctrl+c", "quit"},
-		{"u", "toggle history"},
+		{"F1 / esc", "open / close help"},
+		{"ctrl+c", "exit app"},
+		{"L", "collapse / restore left rail"},
 		{"", ""},
-		{"schema", "↑↓ move · enter open/select · c connect"},
+		{"schema", "↑↓ move · enter open/browse · x columns · / filter · c connect"},
 		{"editor", "type · alt+enter run · ↑↓←→ move · ctrl+p/n history"},
-		{"results", "↑↓ move · ←→ col · s sort · f filter · n next · enter/o row · delete"},
-		{"row panel", "↑↓ field · enter edit · r raw · s save · esc close"},
-		{"history", "↑↓ move · enter undo · esc close"},
+		{"results", "↑↓ move · ←→ col · s sort · f filter · n next · [ ] ring · enter row"},
+		{"rail", "1 row · 2 hist · 3 ai · esc close"},
+		{"row", "↑↓ field · enter edit · r raw · s save"},
+		{"hist", "↑↓ move · enter undo"},
 		{"ai", "type · enter run · a mode · esc interrupt · y/n confirm"},
 	}
 	var b strings.Builder
@@ -58,11 +59,9 @@ func focusedName(f paneFocus) string {
 		return "editor"
 	case focusResults:
 		return "results"
-	case focusRow:
-		return "row"
-	case focusHistory:
-		return "history"
+	case focusRail:
+		return "rail"
 	default:
-		return "ai"
+		return "rail"
 	}
 }

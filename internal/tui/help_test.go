@@ -7,7 +7,7 @@ import (
 
 func TestHelpListsKeysPerPane(t *testing.T) {
 	out := renderHelp(focusResults, 80, 30)
-	for _, want := range []string{"schema", "editor", "results", "sort", "filter", "row panel", "history", "ai"} {
+	for _, want := range []string{"schema", "editor", "results", "sort", "filter", "rail", "hist", "ai"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("help missing %q", want)
 		}

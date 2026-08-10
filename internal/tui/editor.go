@@ -26,6 +26,15 @@ func (e *editor) SetViewport(w, h int) {
 	e.vw, e.vh = w, h
 }
 
+// title names the pane, carrying the current default database so the border
+// shows what schema unqualified SQL resolves against.
+func (e *editor) title(currentDB string) string {
+	if currentDB == "" {
+		return "editor"
+	}
+	return "editor — " + currentDB
+}
+
 // insert places r at the cursor. Starting to type after a history recall begins
 // a fresh buffer.
 func (e *editor) insert(r rune) {

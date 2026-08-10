@@ -125,3 +125,13 @@ func TestEditorViewShowsCursor(t *testing.T) {
 		t.Fatalf("view = %q, want cursor before b", out)
 	}
 }
+
+func TestEditorTitleShowsDB(t *testing.T) {
+	e := newEditor()
+	if got := e.title("app"); !strings.Contains(got, "app") {
+		t.Fatalf("editor title missing db: %q", got)
+	}
+	if got := e.title(""); !strings.Contains(got, "editor") {
+		t.Fatalf("empty-db title should still say editor: %q", got)
+	}
+}
