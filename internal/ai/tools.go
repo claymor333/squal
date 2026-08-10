@@ -182,7 +182,11 @@ func (r *Registry) build() {
 			if err != nil {
 				return "", err
 			}
-			row, err := r.ed.Load(ctx, pkVals)
+			ed, err := r.ensureEditor(argStr(args, "database"), argStr(args, "table"))
+			if err != nil {
+				return "", err
+			}
+			row, err := ed.Load(ctx, pkVals)
 			if err != nil {
 				return "", err
 			}
@@ -191,16 +195,21 @@ func (r *Registry) build() {
 		}})
 	r.Register(Tool{Name: "update_row", ReadOnly: false, Description: "Update a row by PK.",
 		Params: map[string]any{"type": "object", "properties": map[string]any{
-			"table":  map[string]any{"type": "string"},
-			"pk":     map[string]any{"type": "object"},
-			"values": map[string]any{"type": "object"},
-		}, "required": []string{"table", "pk", "values"}},
+			"database": map[string]any{"type": "string"},
+			"table":    map[string]any{"type": "string"},
+			"pk":       map[string]any{"type": "object"},
+			"values":   map[string]any{"type": "object"},
+		}, "required": []string{"database", "table", "pk", "values"}},
 		Execute: func(ctx context.Context, args map[string]any) (string, error) {
 			pkVals, err := mapArgsToStr(args["pk"])
 			if err != nil {
 				return "", err
 			}
-			before, err := r.ed.Load(ctx, pkVals)
+			ed, err := r.ensureEditor(argStr(args, "database"), argStr(args, "table"))
+			if err != nil {
+				return "", err
+			}
+			before, err := ed.Load(ctx, pkVals)
 			if err != nil {
 				return "", err
 			}
@@ -211,7 +220,7 @@ func (r *Registry) build() {
 			for k, v := range args["values"].(map[string]any) {
 				after[k] = anyToStr(v)
 			}
-			n, err := r.ed.Update(ctx, before, after)
+			n, err := ed.Update(ctx, before, after)
 			if err != nil {
 				return "", err
 			}
@@ -232,19 +241,24 @@ func (r *Registry) build() {
 		}})
 	r.Register(Tool{Name: "delete_row", ReadOnly: false, Description: "Delete a row by PK.",
 		Params: map[string]any{"type": "object", "properties": map[string]any{
-			"table": map[string]any{"type": "string"},
-			"pk":    map[string]any{"type": "object"},
-		}, "required": []string{"table", "pk"}},
+			"database": map[string]any{"type": "string"},
+			"table":    map[string]any{"type": "string"},
+			"pk":       map[string]any{"type": "object"},
+		}, "required": []string{"database", "table", "pk"}},
 		Execute: func(ctx context.Context, args map[string]any) (string, error) {
 			pkVals, err := mapArgsToStr(args["pk"])
 			if err != nil {
 				return "", err
 			}
-			before, err := r.ed.Load(ctx, pkVals)
+			ed, err := r.ensureEditor(argStr(args, "database"), argStr(args, "table"))
 			if err != nil {
 				return "", err
 			}
-			n, err := r.ed.Delete(ctx, pkVals)
+			before, err := ed.Load(ctx, pkVals)
+			if err != nil {
+				return "", err
+			}
+			n, err := ed.Delete(ctx, pkVals)
 			if err != nil {
 				return "", err
 			}
@@ -352,6 +366,24 @@ func mapArgsToStr(v any) (map[string]string, error) {
 		out[k] = anyToStr(vv)
 	}
 	return out, nil
+}
+
+// ensureEditor lazily constructs the RowEditor for a table. The registry is
+// built at connection time when no table context exists yet, so row tools
+// create their editor on first use.
+func (r *Registry) ensureEditor(dbName, table string) (*db.RowEditor, error) {
+	if r.ed != nil {
+		return r.ed, nil
+	}
+	if r.conn == nil {
+		return nil, fmt.Errorf("row tools require a live connection")
+	}
+	ed, err := db.NewRowEditor(r.conn, dbName, table)
+	if err != nil {
+		return nil, err
+	}
+	r.ed = ed
+	return ed, nil
 }
 
 // Summarize renders a compact, model-usable description of a result set:

@@ -2,7 +2,11 @@ package ai
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/claymor333/squal/internal/config"
 )
 
 type fakeTransport struct {
@@ -74,6 +78,25 @@ func TestAgentToolErrorBecomesResult(t *testing.T) {
 	_, err := a.Run(context.Background(), "go")
 	if err != nil {
 		t.Fatal(err) // errors become tool results, so the loop still terminates
+	}
+}
+
+func TestAgentFactoryFallsBackToTextTransport(t *testing.T) {
+	// A server that rejects the tools param (400) makes ToolsSupported false,
+	// so the factory must pick the text transport — not the native one.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"tools not supported"}}`, http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	client := New(config.AI{BaseURL: srv.URL, Model: "m"})
+	reg := NewRegistry(nil, nil, nil, nil)
+	reg.Register(Tool{Name: "echo", ReadOnly: true, Execute: func(ctx context.Context, args map[string]any) (string, error) {
+		return "ok", nil
+	}})
+	a := NewAgentForClient(client, reg, NewSession(client))
+	if a.transport.Name() != "text" {
+		t.Fatalf("transport = %q, want text fallback", a.transport.Name())
 	}
 }
 

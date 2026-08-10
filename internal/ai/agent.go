@@ -51,6 +51,18 @@ func NewAgent(t transport, r *Registry, s *Session) *Agent {
 	return &Agent{transport: t, registry: r, session: s, MaxCalls: MaxToolCalls}
 }
 
+// NewAgentForClient builds an agent over a Client, probing the endpoint for
+// native tools support and selecting the transport accordingly: native when
+// supported, text-protocol fallback otherwise. This is the factory the TUI
+// uses so the fallback decision lives in the ai package, not the panel.
+func NewAgentForClient(c *Client, r *Registry, s *Session) *Agent {
+	t := transport(newNativeTransport(c))
+	if !c.ToolsSupported(context.Background()) {
+		t = newTextTransport(c)
+	}
+	return &Agent{transport: t, registry: r, session: s, MaxCalls: MaxToolCalls}
+}
+
 // SetTranscript enables persistence of each tool call into the state store.
 func (a *Agent) SetTranscript(store *state.Store, connName string) {
 	a.store = store

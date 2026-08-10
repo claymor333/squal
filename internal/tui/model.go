@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/claymor333/squal/internal/ai"
 	"github.com/claymor333/squal/internal/config"
 	"github.com/claymor333/squal/internal/db"
+	"github.com/claymor333/squal/internal/state"
 )
 
 // --- messages ---------------------------------------------------------------
@@ -69,19 +72,6 @@ func closeConnection(idx int, c *db.Conn) tea.Cmd {
 	}
 }
 
-// aiNativeTransport is the native OpenAI-tools transport bound to the AI
-// client. It satisfies the ai package's unexported transport interface
-// structurally so the model can build the agent.
-type aiNativeTransport struct {
-	client *ai.Client
-}
-
-func (t aiNativeTransport) Complete(ctx context.Context, msgs []ai.Message, tools []ai.ToolDef) (ai.Response, error) {
-	return t.client.CompleteTools(ctx, msgs, tools)
-}
-
-func (t aiNativeTransport) Name() string { return "native" }
-
 // wireAI binds the AI panel to a live connection: client, session, registry
 // (with the confirm-flow and OnQuery), and the tool-calling agent.
 func (m *model) wireAI(c *connData, conn *db.Conn) {
@@ -109,7 +99,12 @@ func (m *model) wireAI(c *connData, conn *db.Conn) {
 		c.job = nil
 		c.browse = nil
 	}
-	m.ai.agent = ai.NewAgent(aiNativeTransport{client}, m.ai.registry, m.ai.session)
+	// Transport selection lives in the ai package: probes ToolsSupported and
+	// falls back to the text protocol when the endpoint lacks native tools.
+	m.ai.agent = ai.NewAgentForClient(client, m.ai.registry, m.ai.session)
+	if c.wr.store != nil {
+		m.ai.agent.SetTranscript(c.wr.store, c.profile.Name)
+	}
 }
 
 // --- model -------------------------------------------------------------------
@@ -121,6 +116,7 @@ type model struct {
 	focus    paneFocus
 	connect  *connectView
 	ai       *aiPanel
+	store    *state.Store
 	width    int
 	height   int
 	lastErr  error
@@ -134,6 +130,28 @@ func New(cfg *config.Config, profiles []config.Profile) *model {
 		m.active = i
 	}
 	return m
+}
+
+// ensureStore opens the app-side SQLite store (action log + AI transcript)
+// once and reuses it across connections. Failure is non-fatal: the app runs
+// without persistence rather than refusing to start.
+func (m *model) ensureStore() {
+	if m.store != nil {
+		return
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(dir, "squal", "state.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	s, err := state.Open(path)
+	if err != nil {
+		return
+	}
+	m.store = s
 }
 
 func (m *model) Init() tea.Cmd {
@@ -213,7 +231,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c.dbs = msg.dbs
 			c.loadErr = nil
 			c.pane = newSchemaPane(msg.dbs)
-			c.wr = newWriter(msg.conn, nil, nil) // store + editor injected with the structured-edit tasks
+			m.ensureStore()
+			c.wr = newWriter(msg.conn, m.store, nil)
 			m.wireAI(c, msg.conn)
 		}
 		return m, nil

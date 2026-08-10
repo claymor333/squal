@@ -45,3 +45,14 @@ func TestSummarize(t *testing.T) {
 		t.Fatal("empty summary")
 	}
 }
+
+func TestEnsureEditorWithNilConnNoPanic(t *testing.T) {
+	// A registry built with nil conn/ed (as in tests) must not panic when a
+	// row tool runs: ensureEditor returns an error instead of dereferencing
+	// the nil editor.
+	r := NewRegistry(nil, nil, nil, nil)
+	_, err := r.ensureEditor("squal_smoke", "does_not_exist")
+	if err == nil {
+		t.Fatal("expected error from ensureEditor with nil conn")
+	}
+}
