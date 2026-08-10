@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,11 +28,18 @@ type connClosedMsg struct {
 // --- connection state --------------------------------------------------------
 
 type connData struct {
-	profile config.Profile
-	conn    *db.Conn
-	loading bool
-	dbs     []db.Database
-	loadErr error
+	profile     config.Profile
+	conn        *db.Conn
+	loading     bool
+	dbs         []db.Database
+	loadErr     error
+	pane        *schemaPane
+	ed          *editor
+	results     *resultsView
+	browse      *browseRequestMsg // table browsed by the current results, for load-next
+	job         *fetchJob
+	queryStart  time.Time
+	lastElapsed string
 }
 
 func openConnection(idx int, p config.Profile) tea.Cmd {
@@ -62,6 +71,7 @@ type model struct {
 	cfg      *config.Config
 	conns    []*connData
 	active   int
+	focus    paneFocus
 	width    int
 	height   int
 	lastErr  error
@@ -69,9 +79,9 @@ type model struct {
 }
 
 func New(cfg *config.Config, profiles []config.Profile) *model {
-	m := &model{cfg: cfg}
+	m := &model{cfg: cfg, focus: focusSchema}
 	for i, p := range profiles {
-		m.conns = append(m.conns, &connData{profile: p, loading: true})
+		m.conns = append(m.conns, &connData{profile: p, loading: true, ed: newEditor()})
 		m.active = i
 	}
 	return m
@@ -85,6 +95,40 @@ func (m *model) Init() tea.Cmd {
 		}
 	}
 	return tea.Batch(cmds...)
+}
+
+// --- tab navigation ----------------------------------------------------------
+
+func (m *model) nextTab() {
+	if len(m.conns) > 1 {
+		m.active = (m.active + 1) % len(m.conns)
+	}
+}
+
+func (m *model) prevTab() {
+	if len(m.conns) > 1 {
+		m.active = (m.active - 1 + len(m.conns)) % len(m.conns)
+	}
+}
+
+// nextFocus advances the key focus schema → editor → results.
+func nextFocus(f paneFocus) paneFocus {
+	if f < focusResults {
+		return f + 1
+	}
+	return focusSchema
+}
+
+func prevFocus(f paneFocus) paneFocus {
+	if f > focusSchema {
+		return f - 1
+	}
+	return focusResults
+}
+
+// onBrowse converts a schema selection into a browse query ready to run.
+func (m *model) onBrowse(req browseRequestMsg) any {
+	return runQueryMsg{SQL: browseQuery(req.Database, req.Table, req.PK)}
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -109,6 +153,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			c.dbs = msg.dbs
 			c.loadErr = nil
+			c.pane = newSchemaPane(msg.dbs)
 		}
 		return m, nil
 
@@ -127,23 +172,271 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 		}
 		return m, nil
+
+	case batchMsg:
+		return m, m.handleBatch(msg)
+
+	case queryDoneMsg:
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		if cur.results != nil {
+			cur.results.loading = false
+			cur.results.done = true
+			if msg.Err != nil {
+				cur.results.err = msg.Err
+				m.lastErr = msg.Err
+			} else {
+				cur.lastElapsed = msg.Elapsed
+			}
+		} else if msg.Err != nil {
+			m.lastErr = msg.Err
+		}
+		return m, nil
 	}
 	return m, nil
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
 		if m.active >= 0 && m.active < len(m.conns) {
 			return m, closeConnection(m.active, m.conns[m.active].conn)
 		}
 		return m, tea.Quit
 	case "tab":
-		if len(m.conns) > 1 {
-			m.active = (m.active + 1) % len(m.conns)
+		m.focus = nextFocus(m.focus)
+		return m, nil
+	case "shift+tab":
+		m.focus = prevFocus(m.focus)
+		return m, nil
+	case "q":
+		if m.focus == focusEditor || m.active < 0 || m.active >= len(m.conns) {
+			break // 'q' is text input in the editor; ignore it elsewhere
+		}
+		return m, closeConnection(m.active, m.conns[m.active].conn)
+	}
+	if m.active < 0 || m.active >= len(m.conns) {
+		return m, nil
+	}
+	cur := m.conns[m.active]
+
+	switch m.focus {
+	case focusSchema:
+		switch msg.String() {
+		case "up":
+			if cur.pane != nil {
+				cur.pane.moveUp()
+			}
+		case "down":
+			if cur.pane != nil {
+				cur.pane.moveDown()
+			}
+		case "enter":
+			if cur.pane != nil && cur.conn != nil {
+				if req, ok := cur.pane.selectCurrent().(browseRequestMsg); ok {
+					if rq, ok := m.onBrowse(req).(runQueryMsg); ok {
+						cur.browse = &req
+						return m, m.startFetch(context.Background(), rq.SQL)
+					}
+				}
+			}
+		}
+	case focusEditor:
+		switch msg.String() {
+		case "up":
+			if cur.ed != nil {
+				cur.ed.historyUp()
+			}
+		case "backspace":
+			if cur.ed != nil {
+				cur.ed.backspace()
+			}
+		case "ctrl+enter":
+			if cur.ed != nil && cur.conn != nil {
+				if rq, ok := cur.ed.run().(runQueryMsg); ok {
+					cur.browse = nil
+					return m, m.startFetch(context.Background(), rq.SQL)
+				}
+			}
+		default:
+			runes := []rune(msg.String())
+			if len(runes) == 1 && cur.ed != nil {
+				cur.ed.insert(runes[0])
+			}
+		}
+	case focusResults:
+		switch msg.String() {
+		case "up":
+			scrollResults(cur.results, -1)
+		case "down":
+			scrollResults(cur.results, 1)
+		case "s":
+			toggleSort(cur.results)
+		case "f":
+			// filter prompt deferred to a later phase; sort is the wired behavior
+		case "n":
+			return m, m.loadNext(cur)
 		}
 	}
 	return m, nil
+}
+
+// --- query pipeline ----------------------------------------------------------
+
+// startFetch launches db.Fetch on a goroutine and returns the cmd that pumps
+// batches into the tea event loop as batchMsg values.
+func (m *model) startFetch(ctx context.Context, sql string) tea.Cmd {
+	cur := m.conns[m.active]
+	col, ch, err := cur.conn.Fetch(ctx, sql, 1000)
+	if err != nil {
+		cur.job = nil
+		return func() tea.Msg { return queryDoneMsg{Err: err} }
+	}
+	cur.job = &fetchJob{col: col, ch: ch, sql: sql}
+	cur.results = newResultsView(col)
+	cur.results.loading = true
+	cur.queryStart = time.Now()
+	return func() tea.Msg {
+		b, ok := <-ch
+		if !ok {
+			return queryDoneMsg{Elapsed: time.Since(cur.queryStart).Round(time.Millisecond).String()}
+		}
+		return batchMsg{Rows: b.Rows, Done: b.Done, Err: b.Err}
+	}
+}
+
+// pumpBatch re-arms the receive loop for the next chunk.
+func (m *model) pumpBatch(cur *connData) tea.Cmd {
+	if cur.job == nil {
+		return nil
+	}
+	ch := cur.job.ch
+	return func() tea.Msg {
+		b, ok := <-ch
+		if !ok {
+			return queryDoneMsg{Elapsed: time.Since(cur.queryStart).Round(time.Millisecond).String()}
+		}
+		return batchMsg{Rows: b.Rows, Done: b.Done, Err: b.Err}
+	}
+}
+
+// handleBatch applies a chunk to the active results view and re-arms the pump
+// unless the fetch is done or errored.
+func (m *model) handleBatch(msg batchMsg) tea.Cmd {
+	if m.active < 0 || m.active >= len(m.conns) {
+		return nil
+	}
+	cur := m.conns[m.active]
+	if msg.Err != nil {
+		cur.results.err = msg.Err
+		cur.results.loading = false
+		return nil
+	}
+	cur.results.appendBatch(msg.Rows)
+	if msg.Done {
+		cur.results.loading = false
+		cur.results.done = true
+		return nil
+	}
+	return m.pumpBatch(cur)
+}
+
+// loadNext keyset-paginates the current browse via db.LoadNextSQL. It is a
+// no-op unless the active results are a finished fetch of a browsed table with
+// a resolvable primary key.
+func (m *model) loadNext(cur *connData) tea.Cmd {
+	if cur == nil || cur.conn == nil || cur.browse == nil || cur.results == nil {
+		return nil
+	}
+	if !cur.results.done || cur.results.err != nil {
+		return nil
+	}
+	req := *cur.browse
+	ctx := context.Background()
+	pk, err := cur.conn.PrimaryKey(ctx, req.Database, req.Table)
+	if err != nil || len(pk) == 0 {
+		return nil
+	}
+	lastVals, ok := lastPKVals(cur.results, pk)
+	if !ok {
+		return nil
+	}
+	sql, err := db.LoadNextSQL(req.Database, req.Table, pk, lastVals, browseLimit)
+	if err != nil {
+		return nil
+	}
+	return m.startFetch(ctx, sql)
+}
+
+func lastPKVals(r *resultsView, pk []string) ([]string, bool) {
+	if r.data == nil || r.data.Rows == 0 {
+		return nil, false
+	}
+	cols := make([]int, len(pk))
+	for i, name := range pk {
+		idx := -1
+		for c, col := range r.data.Columns {
+			if col == name {
+				idx = c
+				break
+			}
+		}
+		if idx < 0 {
+			return nil, false
+		}
+		cols[i] = idx
+	}
+	last := r.data.Rows - 1
+	vals := make([]string, len(pk))
+	for i, idx := range cols {
+		vals[i] = r.data.Value(idx, last)
+	}
+	return vals, true
+}
+
+// --- results interaction -----------------------------------------------------
+
+const resultsViewport = 8
+
+// scrollResults moves the selection by one logical row, sliding the window
+// when the selection would leave the viewport.
+func scrollResults(r *resultsView, dir int) {
+	if r == nil || len(r.order) == 0 {
+		return
+	}
+	if dir > 0 {
+		if r.top+r.selRow < len(r.order)-1 {
+			if r.selRow < resultsViewport-1 {
+				r.selRow++
+			} else {
+				r.top++
+			}
+		}
+		return
+	}
+	if r.top+r.selRow > 0 {
+		if r.selRow > 0 {
+			r.selRow--
+		} else {
+			r.top--
+		}
+	}
+}
+
+// toggleSort flips the sort on the current column, defaulting to column 0.
+func toggleSort(r *resultsView) {
+	if r == nil || r.data == nil {
+		return
+	}
+	if r.sortCol < 0 {
+		r.sortCol = 0
+		r.sortAsc = true
+	} else {
+		r.sortAsc = !r.sortAsc
+	}
+	r.rebuildOrder()
 }
 
 // --- view --------------------------------------------------------------------
@@ -181,8 +474,31 @@ func (m *model) View() string {
 		body = styleDim.Render("connecting to " + cur.profile.Name + "…")
 	case cur.loadErr != nil:
 		body = styleErr.Render("connection failed: " + cur.loadErr.Error())
+	case cur.pane != nil:
+		body = cur.pane.view()
 	default:
 		body = renderSchemaTree(cur.dbs)
+	}
+
+	editorView := styleDim.Render("(empty)")
+	if cur.ed != nil {
+		editorView = cur.ed.view()
+	}
+
+	var elapsed string
+	if cur.results != nil && cur.job != nil {
+		if cur.results.done {
+			elapsed = cur.lastElapsed
+		} else {
+			elapsed = time.Since(cur.queryStart).Round(time.Millisecond).String() + "…"
+		}
+	}
+	if elapsed == "" {
+		elapsed = "–"
+	}
+	var rerr error
+	if cur.results != nil {
+		rerr = cur.results.err
 	}
 
 	var errline string
@@ -192,10 +508,22 @@ func (m *model) View() string {
 
 	return stylePane.Render(
 		tabs + "\n" +
+			sectionHeader("schema", m.focus == focusSchema) + "\n" +
 			body + "\n" +
-			styleDim.Render(renderHint()) + "\n" +
-			errline,
+			sectionHeader("editor", m.focus == focusEditor) + "\n" +
+			editorView + "\n" +
+			sectionHeader("results", m.focus == focusResults) + "\n" +
+			renderResults(cur.results) + "\n" +
+			errline +
+			statusView(cur.profile.Name, cur.results, elapsed, rerr, m.focus) + "\n",
 	)
+}
+
+func sectionHeader(label string, focused bool) string {
+	if focused {
+		return styleAccent.Render("▸ " + label)
+	}
+	return styleDim.Render("  " + label)
 }
 
 func renderSchemaTree(dbs []db.Database) string {
@@ -212,8 +540,63 @@ func renderSchemaTree(dbs []db.Database) string {
 	return out
 }
 
-func renderHint() string {
-	return "tab: next connection · q/ctrl+c: close & quit"
+// renderResults renders a compact grid over the loaded rows.
+func renderResults(r *resultsView) string {
+	if r == nil {
+		return styleDim.Render("(no query)")
+	}
+	if r.err != nil {
+		return styleErr.Render("✗ " + r.err.Error())
+	}
+	if r.data == nil || len(r.data.Columns) == 0 {
+		return styleDim.Render("(no columns)")
+	}
+	if len(r.order) == 0 {
+		return styleDim.Render("(no rows)")
+	}
+	var b strings.Builder
+	for c, col := range r.data.Columns {
+		if c > 0 {
+			b.WriteString(" │ ")
+		}
+		head := col
+		if r.sortCol == c {
+			if r.sortAsc {
+				head += " ▲"
+			} else {
+				head += " ▼"
+			}
+		}
+		b.WriteString(styleAccent.Render(head))
+	}
+	b.WriteString("\n")
+	end := r.top + resultsViewport
+	if end > len(r.order) {
+		end = len(r.order)
+	}
+	for row := r.top; row < end; row++ {
+		mark := "  "
+		if row == r.top+r.selRow {
+			mark = "◉ "
+		}
+		b.WriteString(mark)
+		for c := range r.data.Columns {
+			if c > 0 {
+				b.WriteString(" │ ")
+			}
+			b.WriteString(truncate(r.data.Value(c, r.order[row]), 24))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 var _ tea.Model = (*model)(nil)
