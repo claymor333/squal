@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/claymor333/squal/internal/ai"
 	"github.com/claymor333/squal/internal/config"
 	"github.com/claymor333/squal/internal/db"
 )
@@ -68,6 +69,49 @@ func closeConnection(idx int, c *db.Conn) tea.Cmd {
 	}
 }
 
+// aiNativeTransport is the native OpenAI-tools transport bound to the AI
+// client. It satisfies the ai package's unexported transport interface
+// structurally so the model can build the agent.
+type aiNativeTransport struct {
+	client *ai.Client
+}
+
+func (t aiNativeTransport) Complete(ctx context.Context, msgs []ai.Message, tools []ai.ToolDef) (ai.Response, error) {
+	return t.client.CompleteTools(ctx, msgs, tools)
+}
+
+func (t aiNativeTransport) Name() string { return "native" }
+
+// wireAI binds the AI panel to a live connection: client, session, registry
+// (with the confirm-flow and OnQuery), and the tool-calling agent.
+func (m *model) wireAI(c *connData, conn *db.Conn) {
+	if m.ai == nil {
+		m.ai = newAIPanel()
+	}
+	client := ai.New(m.cfg.AI)
+	m.ai.client = client
+	m.ai.session = ai.NewSession(client)
+	confirm := func(toolName string, args map[string]any, sql string) (bool, error) {
+		ch := make(chan bool)
+		m.ai.pendingConfirmCh = ch
+		m.ai.pendingConfirm = toolName
+		return <-ch, nil
+	}
+	m.ai.registry = ai.NewRegistry(conn, c.wr.ed, c.wr.store, confirm)
+	m.ai.registry.OnQuery = func(col *db.Columnar) {
+		if col == nil {
+			return
+		}
+		c.results = newResultsView(col)
+		c.results.done = true
+		c.results.loading = false
+		c.results.total = col.Rows
+		c.job = nil
+		c.browse = nil
+	}
+	m.ai.agent = ai.NewAgent(aiNativeTransport{client}, m.ai.registry, m.ai.session)
+}
+
 // --- model -------------------------------------------------------------------
 
 type model struct {
@@ -76,6 +120,7 @@ type model struct {
 	active   int
 	focus    paneFocus
 	connect  *connectView
+	ai       *aiPanel
 	width    int
 	height   int
 	lastErr  error
@@ -83,7 +128,7 @@ type model struct {
 }
 
 func New(cfg *config.Config, profiles []config.Profile) *model {
-	m := &model{cfg: cfg, focus: focusSchema}
+	m := &model{cfg: cfg, focus: focusSchema, ai: newAIPanel()}
 	for i, p := range profiles {
 		m.conns = append(m.conns, &connData{profile: p, loading: true, ed: newEditor()})
 		m.active = i
@@ -115,9 +160,12 @@ func (m *model) prevTab() {
 	}
 }
 
-// nextFocus advances the key focus schema → editor → results.
+// focusAI is the streaming AI panel focus; it follows results in the Tab cycle.
+const focusAI paneFocus = focusResults + 1
+
+// nextFocus advances the key focus schema → editor → results → ai.
 func nextFocus(f paneFocus) paneFocus {
-	if f < focusResults {
+	if f < focusAI {
 		return f + 1
 	}
 	return focusSchema
@@ -127,7 +175,7 @@ func prevFocus(f paneFocus) paneFocus {
 	if f > focusSchema {
 		return f - 1
 	}
-	return focusResults
+	return focusAI
 }
 
 // onBrowse converts a schema selection into a browse query ready to run.
@@ -166,6 +214,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c.loadErr = nil
 			c.pane = newSchemaPane(msg.dbs)
 			c.wr = newWriter(msg.conn, nil, nil) // store + editor injected with the structured-edit tasks
+			m.wireAI(c, msg.conn)
 		}
 		return m, nil
 
@@ -206,6 +255,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastErr = msg.Err
 		}
 		return m, nil
+
+	case aiEventMsg:
+		if m.ai != nil {
+			m.ai.events = append(m.ai.events, msg)
+		}
+		return m, nil
+
+	case runQueryMsg:
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		cur.browse = nil
+		return m, m.startFetch(context.Background(), msg.SQL)
 	}
 	return m, nil
 }
@@ -227,8 +290,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = prevFocus(m.focus)
 		return m, nil
 	case "q":
-		if m.focus == focusEditor || m.active < 0 || m.active >= len(m.conns) {
-			break // 'q' is text input in the editor; ignore it elsewhere
+		if m.focus == focusEditor || m.focus == focusAI || m.active < 0 || m.active >= len(m.conns) {
+			break // 'q' is text input in the editor/AI panel; ignore it elsewhere
 		}
 		return m, closeConnection(m.active, m.conns[m.active].conn)
 	}
@@ -295,6 +358,34 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// filter prompt deferred to a later phase; sort is the wired behavior
 		case "n":
 			return m, m.loadNext(cur)
+		}
+	case focusAI:
+		if m.ai == nil {
+			break
+		}
+		switch msg.String() {
+		case "a":
+			m.ai.toggleMode()
+		case "esc":
+			m.ai.interrupt()
+		case "enter":
+			if m.ai.mode == modeAsk {
+				return m, m.ai.runAsk(context.Background())
+			}
+			return m, m.ai.runQuick(context.Background())
+		case "y":
+			if m.ai.pendingConfirm != "" {
+				m.ai.confirm(true)
+			}
+		case "n":
+			if m.ai.pendingConfirm != "" {
+				m.ai.confirm(false)
+			}
+		default:
+			runes := []rune(msg.String())
+			if len(runes) == 1 {
+				m.ai.request += string(runes[0])
+			}
 		}
 	}
 	return m, nil
@@ -571,6 +662,8 @@ func (m *model) View() string {
 			editorView + "\n" +
 			sectionHeader("results", m.focus == focusResults) + "\n" +
 			renderResults(cur.results) + "\n" +
+			sectionHeader("ai", m.focus == focusAI) + "\n" +
+			renderAI(m.ai) + "\n" +
 			errline +
 			statusView(cur.profile.Name, cur.results, elapsed, rerr, m.focus) + "\n",
 	)
@@ -585,6 +678,14 @@ func sectionHeader(label string, focused bool) string {
 		return styleAccent.Render("▸ " + label)
 	}
 	return styleDim.Render("  " + label)
+}
+
+// renderAI renders the streaming AI panel, or an idle hint when unwired.
+func renderAI(p *aiPanel) string {
+	if p == nil {
+		return styleDim.Render("(ai panel unconfigured)")
+	}
+	return p.view()
 }
 
 var connectFieldLabels = [numConnectFields]string{"host", "port", "user", "pass", "db"}
