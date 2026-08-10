@@ -357,11 +357,16 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if cur.ed != nil {
 				cur.ed.backspace()
 			}
-		case "ctrl+enter":
-			if cur.ed != nil && cur.conn != nil {
+		case "enter":
+			// Enter runs the query (bubbletea has no ctrl+enter key — the
+			// terminal sends a plain enter for it). Always consume the
+			// keystroke (clear + history); dispatch only with a live conn.
+			if cur.ed != nil {
 				if rq, ok := cur.ed.run().(runQueryMsg); ok {
-					cur.browse = nil
-					return m, m.startFetch(context.Background(), rq.SQL)
+					if cur.conn != nil {
+						cur.browse = nil
+						return m, m.startFetch(context.Background(), rq.SQL)
+					}
 				}
 			}
 		default:

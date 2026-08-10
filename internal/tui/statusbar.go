@@ -30,7 +30,7 @@ func statusView(name string, r *resultsView, elapsed string, err error, focus pa
 	case focusSchema:
 		keys = "↑↓ move · enter open/select · tab focus"
 	case focusEditor:
-		keys = "type · ctrl+enter run · ↑ history · tab focus"
+		keys = "type · enter run · ↑ history · tab focus"
 	case focusResults:
 		keys = "↑↓ move · s sort · f filter · n next · tab focus"
 	}

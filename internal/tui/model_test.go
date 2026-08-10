@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/claymor333/squal/internal/config"
 )
 
@@ -31,6 +33,31 @@ func TestModelBrowseRequestBuildsRun(t *testing.T) {
 	}
 	if rm.SQL == "" {
 		t.Fatal("empty query")
+	}
+}
+
+func TestEditorEnterRunsQuery(t *testing.T) {
+	// Enter (not ctrl+enter — bubbletea has no such key) must run the query.
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	cur.ed = newEditor()
+	for _, r := range "SELECT 1" {
+		cur.ed.insert(r)
+	}
+	m.focus = focusEditor
+
+	// handleKey needs a live conn for startFetch; without one it still must
+	// consume the Enter (clear the editor + push history) rather than swallow
+	// it. The bug was: Enter hit the default branch and was ignored.
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("no conn: expected nil cmd (query can't run without a connection)")
+	}
+	if got := cur.ed.text(); got != "" {
+		t.Fatalf("editor not cleared after Enter: %q", got)
+	}
+	if len(cur.ed.history) != 1 || cur.ed.history[0] != "SELECT 1" {
+		t.Fatalf("history = %v", cur.ed.history)
 	}
 }
 
