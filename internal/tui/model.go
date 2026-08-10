@@ -76,6 +76,24 @@ func closeConnection(idx int, c *db.Conn) tea.Cmd {
 	}
 }
 
+// quitCmd closes every live connection and the app-side store so the process
+// exits cleanly. It runs alongside tea.Quit on ctrl+c.
+func (m *model) quitCmd() tea.Cmd {
+	conns := m.conns
+	store := m.store
+	return func() tea.Msg {
+		for _, c := range conns {
+			if c.conn != nil {
+				c.conn.Close()
+			}
+		}
+		if store != nil {
+			store.Close()
+		}
+		return nil
+	}
+}
+
 // wireAI binds the AI panel to a live connection: client, session, registry
 // (with the confirm-flow and OnQuery), and the tool-calling agent.
 func (m *model) wireAI(c *connData, conn *db.Conn) {
@@ -446,7 +464,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if msg.String() == "esc" {
 			m.help = false
 		}
-		return m, nil
+		if msg.String() != "ctrl+c" {
+			return m, nil
+		}
+		// ctrl+c quits even from the help overlay
 	}
 	if m.confirm != nil {
 		// modal: y approves, n/esc cancels, ctrl+c falls through to quit.
@@ -467,10 +488,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.transientErr = nil // the status error slot is one-shot; any key clears it
 	switch msg.String() {
 	case "ctrl+c":
-		if m.active >= 0 && m.active < len(m.conns) {
-			return m, closeConnection(m.active, m.conns[m.active].conn)
-		}
-		return m, tea.Quit
+		// immediately exit; never just drop a tab (that is q/ctrl+d's job)
+		return m, tea.Batch(m.quitCmd(), tea.Quit)
 	case "ctrl+d":
 		if m.active >= 0 && m.active < len(m.conns) {
 			return m, closeConnection(m.active, m.conns[m.active].conn)
@@ -764,9 +783,12 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleConnectKey routes keys while the new-connection modal is open.
 func (m *model) handleConnectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "ctrl+c":
+	case "esc":
 		m.connect = nil
 		return m, nil
+	case "ctrl+c":
+		// ctrl+c always exits the app, even mid-dialog
+		return m, tea.Batch(m.quitCmd(), tea.Quit)
 	case "enter":
 		name := m.connect.value(hostField)
 		if name == "" {

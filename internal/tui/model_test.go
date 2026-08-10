@@ -285,6 +285,37 @@ func TestCtrlDClosesDirectly(t *testing.T) {
 	}
 }
 
+// TestCtrlCQuits: ^c must exit the app, not drop a tab (q/ctrl+d own closing).
+func TestCtrlCQuits(t *testing.T) {
+	m := newModelForTest(2)
+	m.focus = focusSchema
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c should dispatch a quit cmd")
+	}
+	if len(m.conns) != 2 {
+		t.Fatalf("ctrl+c must not close a tab: conns = %d", len(m.conns))
+	}
+}
+
+func TestCtrlCQuitsFromHelp(t *testing.T) {
+	m := newModelForTest(1)
+	m.help = true
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c should quit even while help is open")
+	}
+}
+
+func TestCtrlCQuitsFromConnectDialog(t *testing.T) {
+	m := newModelForTest(1)
+	m.connect = newConnectView()
+	_, cmd := m.handleConnectKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c should quit even from the connect dialog")
+	}
+}
+
 func TestTransientErrorClearedOnKey(t *testing.T) {
 	m := newModelForTest(1)
 	m.transientErr = errSave
