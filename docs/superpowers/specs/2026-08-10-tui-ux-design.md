@@ -112,30 +112,37 @@ one, and `enter` on a ring grid re-sorts/edits as normal. The footer shows
 
 ## Keymap v3
 
+**Shortcuts always use a modifier** (`alt+…`, `ctrl+…`, `F1`, `del`, `pgup`/`pgdn`).
+Bare keys are reserved for text input (SQL, filters, the AI request) and
+navigation (arrows, `enter`, `esc`, `tab`). This is what lets the editor and
+filters accept any character without a shortcut hijacking it. The F1 overlay
+renders from `key.Binding`s, so it is the live source of truth.
+
 | Key | L rail (schema) | T editor | B results | R rail | Footer | Global |
 |-----|-----------------|----------|-----------|--------|--------|--------|
 | `tab`/`shift+tab` | cycle zones | cycle | cycle | cycle | | |
 | `↑`/`↓` | move / scroll tree | move cursor line | move row | move tab body | | |
 | `←`/`→` | | move cursor char | move column | | | |
-| `/` | filter tree | | | | | |
-| `L` | collapse rail | | | | | |
 | `enter` | open db / browse | newline | open row (rail) | | | |
 | `alt+enter` | | **run query** | | | | |
-| `ctrl+r` | | run (alt) | | | | |
-| `[` / `]` | | | result ring prev/next | | | |
+| `alt+f` | filter tree | | filter | | | |
+| `alt+x` | expand columns | | | | | |
+| `alt+s` | | | sort cursor column | save (row tab) | | |
+| `alt+n` | | | keyset next page | | | |
+| `pgup`/`pgdn` | | | result ring prev/next | | | |
 | `del` | | | ring drop / delete row | | | |
-| `s` | | | sort cursor column | | | |
-| `f` / `esc` | | | filter in/out | | | |
-| `n` | | | keyset next page | | | |
-| `1`/`2`/`3` | | | | rail tab row/hist/ai | | |
-| `c` | new connection | | | | | |
-| `q` | → confirm close | text | | | | |
-| `ctrl+d` | close connection | | | | | |
-| `ctrl+c` | **exit app** | exit | exit | exit | | exit |
-| `F1` / `?` | help | help | help | help | | help |
-| `y`/`n` | | | confirm delete | confirm write | | confirm close |
+| `alt+1`/`2`/`3` | | | | rail tab row/hist/ai | | |
+| `alt+l` | | | | | | collapse left rail |
+| `alt+c` | new connection | | | | | |
+| `alt+q` | | | | | | confirm close |
+| `ctrl+d` | | | | | | close connection |
+| `ctrl+c` | | | | | | **exit app** |
+| `F1` | help | help | help | help | | help |
+| `esc` | end filter | | end filter | close rail / cancel edit | | dismiss |
 
-`Ctrl+P`/`Ctrl+N` walk editor history.
+`Ctrl+P`/`Ctrl+N` walk editor history; `Ctrl+R` also runs the query. The AI tab:
+`enter` runs, `alt+a` toggles Ask/NL→SQL, bare keys type; `y`/`n` answer a
+pending write confirm. A confirm modal answers with bare `y`/`n`/`esc`.
 
 ## Error scoping
 

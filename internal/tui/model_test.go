@@ -119,12 +119,18 @@ func newModelForTest(count int) *model {
 	return m
 }
 
+// altKey builds an Alt-modified rune key; shortcuts use modifiers, so tests
+// press the same combos a user would.
+func altKey(r rune) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true}
+}
+
 func TestResultsKeysSortCursorColumn(t *testing.T) {
 	m := newModelForTest(1)
 	m.conns[m.active].results = newResultsView(colsData())
 	m.focus = focusResults
 	m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
 	if m.conns[m.active].results.sortCol != 1 {
 		t.Fatalf("sortCol = %d, want 1", m.conns[m.active].results.sortCol)
 	}
@@ -135,7 +141,7 @@ func TestResultsKeysFilterIncremental(t *testing.T) {
 	m.conns[m.active].results = newResultsView(colsData())
 	m.focus = focusResults
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}, Alt: true})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	r := m.conns[m.active].results
 	if r.filter != "b" {
@@ -197,7 +203,7 @@ func TestHistoryToggleLoadsActions(t *testing.T) {
 	m.focus = focusResults
 	cur := m.conns[0]
 
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
 	if cmd == nil || cur.hist == nil {
 		t.Fatal("u should open the history tab and dispatch a load")
 	}
@@ -235,14 +241,14 @@ func TestQuestionMarkTypesInEditor(t *testing.T) {
 	}
 }
 
-// TestQuestionMarkOpensHelp covers the ? binding and the help overlay render.
-func TestQuestionMarkOpensHelp(t *testing.T) {
+// TestF1OpensHelp covers the F1 help binding and the overlay render.
+func TestF1OpensHelp(t *testing.T) {
 	m := newModelForTest(1)
 	m.width, m.height = 80, 30
 	m.focus = focusSchema
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
 	if !m.help {
-		t.Fatal("? should open the help overlay")
+		t.Fatal("F1 should open the help overlay")
 	}
 	if !strings.Contains(m.View(), "keys") {
 		t.Fatal("help overlay should render")
@@ -257,7 +263,7 @@ func TestQuestionMarkOpensHelp(t *testing.T) {
 func TestCloseRequiresConfirm(t *testing.T) {
 	m := newModelForTest(1)
 	m.focus = focusSchema
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}, Alt: true})
 	if m.confirm == nil {
 		t.Fatal("q should open a confirm modal, not close immediately")
 	}
@@ -330,14 +336,14 @@ func TestRailTabSwitch(t *testing.T) {
 	m := newModelForTest(1)
 	cur := m.conns[0]
 	cur.hist = newHistoryView(nil)
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
 	if !cur.railOpen || cur.railTab != focusHistory {
 		t.Fatalf("rail = %v/%v, want open on hist", cur.railOpen, cur.railTab)
 	}
 	if m.focus != focusRail {
 		t.Fatalf("focus = %v, want rail", m.focus)
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}, Alt: true})
 	if cur.railTab != focusAI {
 		t.Fatalf("railTab = %v, want ai", cur.railTab)
 	}
@@ -351,19 +357,19 @@ func TestRingFlipKeys(t *testing.T) {
 	cur.ring.push(newResultsView(&db.Columnar{Columns: []string{"x"}, Cols: [][]string{{"1"}}, Rows: 1}))
 	cur.results = cur.ring.cur()
 	m.focus = focusResults
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
 	if cur.results.data.Columns[0] == "x" {
-		t.Fatalf("] should leave the newest grid: %v", cur.results.data.Columns)
+		t.Fatalf("pgdn should leave the newest grid: %v", cur.results.data.Columns)
 	}
 }
 
 func TestRailCollapseToggles(t *testing.T) {
 	m := newModelForTest(1)
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}, Alt: true})
 	if !m.railCollapsed {
 		t.Fatal("L should collapse the left rail")
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}, Alt: true})
 	if m.railCollapsed {
 		t.Fatal("L again should restore the left rail")
 	}
@@ -388,7 +394,7 @@ func TestHelpDismissesOnActionKey(t *testing.T) {
 	m := newModelForTest(1)
 	m.help = true
 	m.focus = focusSchema
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
 	if m.help {
 		t.Fatal("any key should dismiss help")
 	}
@@ -397,7 +403,8 @@ func TestHelpDismissesOnActionKey(t *testing.T) {
 	}
 }
 
-// TestDigitsTypeInEditor: 1/2/3 are SQL text in the editor, not rail switches.
+// TestDigitsTypeInEditor: 1/2/3 are SQL text in the editor, not rail switches —
+// bare digits have no shortcut bindings at all.
 func TestDigitsTypeInEditor(t *testing.T) {
 	m := newModelForTest(1)
 	m.conns[m.active].ed = newEditor()
@@ -419,7 +426,7 @@ func TestRailRendersWhenOpen(t *testing.T) {
 	cur := m.conns[0]
 	cur.results = newResultsView(colsData())
 	m.focus = focusResults
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}, Alt: true})
 	out := m.View()
 	if !strings.Contains(out, "rail") || !strings.Contains(out, "[row]") {
 		t.Fatalf("rail not rendered: %q", out)
@@ -431,9 +438,24 @@ func TestRailRendersWhenOpen(t *testing.T) {
 
 func TestLowercaseLCollapses(t *testing.T) {
 	m := newModelForTest(1)
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}, Alt: true})
 	if !m.railCollapsed {
 		t.Fatal("lowercase l should also collapse the left rail")
+	}
+}
+
+// TestAIRequestTypesBareLetters: bare keys (even y/n) type into the AI request;
+// y/n only answer a pending write confirm.
+func TestAIRequestTypesBareLetters(t *testing.T) {
+	m := newModelForTest(1)
+	m.ai = newAIPanel()
+	m.focus = focusRail
+	m.conns[0].railOpen = true
+	m.conns[0].railTab = focusAI
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if got := m.ai.request.Value(); got != "yn" {
+		t.Fatalf("request = %q, want yn (bare letters type)", got)
 	}
 }
 

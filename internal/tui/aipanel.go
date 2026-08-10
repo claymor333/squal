@@ -52,6 +52,7 @@ func newAIPanel() *aiPanel {
 	in := textinput.New()
 	in.Prompt = ""
 	in.Placeholder = "ask a question…"
+	in.Focus() // textinput ignores keys unfocused; the app owns which pane is active
 	return &aiPanel{mode: modeAsk, request: in}
 }
 

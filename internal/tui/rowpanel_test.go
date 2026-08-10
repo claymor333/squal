@@ -147,7 +147,7 @@ func TestSaveRowDispatchesWriteCmd(t *testing.T) {
 	}
 	cur.row.commitEdit()
 
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
 	if cmd == nil {
 		t.Fatal("s should dispatch a save cmd")
 	}

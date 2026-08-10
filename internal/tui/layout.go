@@ -164,12 +164,16 @@ func clip(s string, w, h int) string {
 }
 
 // fit bounds a rendered (possibly ANSI-colored) string to w×h cells. lipgloss
-// Width handles ANSI-aware truncation and pads short lines.
+// Width pads but never truncates — it wraps — so the string is first
+// MaxWidth-truncated (ANSI-aware) and then padded, keeping single-line bars on
+// one line.
 func fit(s string, w, h int) string {
 	if w < 1 || h < 1 {
 		return ""
 	}
-	return lipgloss.NewStyle().Width(w).Render(clipHeight(s, h))
+	s = clipHeight(s, h)
+	s = lipgloss.NewStyle().MaxWidth(w).Render(s)
+	return lipgloss.NewStyle().Width(w).Render(s)
 }
 
 // paneBox wraps a pane title + body in a rounded border sized to a rect. The

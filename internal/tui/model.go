@@ -553,49 +553,31 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "f1":
 		m.help = true
 		return m, nil
-	case "?":
-		if m.focus == focusEditor || m.focus == focusRail {
-			break // '?' is SQL/input text in these panes; use F1 for help
-		}
-		m.help = true
-		return m, nil
 	case "tab":
 		m.focus = m.nextFocus()
 		return m, nil
 	case "shift+tab":
 		m.focus = m.prevFocus()
 		return m, nil
-	case "L", "l":
+	case "alt+l":
 		m.railCollapsed = !m.railCollapsed
 		return m, nil
-	case "u":
-		if m.active < 0 || m.active >= len(m.conns) {
-			return m, nil
-		}
-		m.focus = focusRail
-		return m, m.activateRail(m.conns[m.active], focusHistory)
-	case "1", "2", "3":
-		// digits are text input in the editor and in the rail's ai/row-edit
-		// tabs; elsewhere they switch the rail tab.
-		if m.focus == focusEditor || (m.focus == focusRail && m.railIsText()) {
-			break
-		}
+	case "alt+1", "alt+2", "alt+3":
 		if m.active < 0 || m.active >= len(m.conns) {
 			return m, nil
 		}
 		tab := focusRow
 		switch msg.String() {
-		case "2":
+		case "alt+2":
 			tab = focusHistory
-		case "3":
+		case "alt+3":
 			tab = focusAI
 		}
 		m.focus = focusRail
 		return m, m.activateRail(m.conns[m.active], tab)
-	case "q":
-		text := m.focus == focusEditor || (m.focus == focusRail && m.railIsText())
-		if text || m.active < 0 || m.active >= len(m.conns) {
-			break // 'q' is text input in these panes; ignore it elsewhere
+	case "alt+q":
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
 		}
 		cur := m.conns[m.active]
 		m.confirm = &confirmModal{
@@ -614,9 +596,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.focus {
 	case focusSchema:
 		switch msg.String() {
-		case "c":
+		case "alt+c":
 			m.connect = newConnectView()
-		case "/":
+		case "alt+f":
 			if cur.pane != nil {
 				cur.pane.startFilter()
 			}
@@ -624,7 +606,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if cur.pane != nil {
 				cur.pane.endFilter()
 			}
-		case "x":
+		case "alt+x":
 			if cur.pane != nil {
 				cur.pane.toggleTable()
 			}
@@ -721,11 +703,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if r != nil {
 				r.moveCol(1)
 			}
-		case "s":
+		case "alt+s":
 			if r != nil {
 				r.sortCursor()
 			}
-		case "f":
+		case "alt+f":
 			if r != nil {
 				r.startFilter()
 			}
@@ -737,19 +719,19 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if r != nil {
 				r.popFilter()
 			}
-		case "n":
+		case "alt+n":
 			return m, m.loadNext(cur)
-		case "[":
+		case "pgup":
 			if cur.ring != nil && cur.ring.len() > 1 {
 				cur.ring.prev()
 				cur.results = cur.ring.cur()
 			}
-		case "]":
+		case "pgdown":
 			if cur.ring != nil && cur.ring.len() > 1 {
 				cur.ring.next()
 				cur.results = cur.ring.cur()
 			}
-		case "enter", "o":
+		case "enter":
 			if cur.browse != nil && r != nil && len(r.order) > 0 {
 				m.focus = focusRail
 				return m, m.activateRail(cur, focusRow)
@@ -784,11 +766,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// rail-level keys work on any tab
 		switch msg.String() {
-		case "1":
+		case "alt+1":
 			return m, m.activateRail(cur, focusRow)
-		case "2":
+		case "alt+2":
 			return m, m.activateRail(cur, focusHistory)
-		case "3":
+		case "alt+3":
 			return m, m.activateRail(cur, focusAI)
 		case "esc":
 			cur.railOpen = false
@@ -850,9 +832,9 @@ func (m *model) railRowKey(cur *connData, msg tea.KeyMsg) tea.Cmd {
 			p.moveDown()
 		case "enter":
 			p.startEdit()
-		case "r":
+		case "alt+r":
 			p.toggleRaw()
-		case "ctrl+s", "s":
+		case "alt+s":
 			r := cur.results
 			if r == nil || cur.browse == nil || len(r.order) == 0 {
 				break
@@ -890,13 +872,25 @@ func (m *model) railHistKey(cur *connData, msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// railAIKey routes keys on the AI rail tab.
+// railAIKey routes keys on the AI rail tab. While a write confirm is pending,
+// y/n/esc answer the dialog; otherwise bare keys are typed into the request.
 func (m *model) railAIKey(msg tea.KeyMsg) tea.Cmd {
 	if m.ai == nil {
 		return nil
 	}
+	if m.ai.pendingConfirm != "" {
+		switch msg.String() {
+		case "y":
+			m.ai.confirm(true)
+		case "n":
+			m.ai.confirm(false)
+		case "esc":
+			m.ai.interrupt()
+		}
+		return nil
+	}
 	switch msg.String() {
-	case "a":
+	case "alt+a":
 		m.ai.toggleMode()
 	case "esc":
 		m.ai.interrupt()
@@ -905,14 +899,6 @@ func (m *model) railAIKey(msg tea.KeyMsg) tea.Cmd {
 			return m.ai.runAsk(context.Background())
 		}
 		return m.ai.runQuick(context.Background())
-	case "y":
-		if m.ai.pendingConfirm != "" {
-			m.ai.confirm(true)
-		}
-	case "n":
-		if m.ai.pendingConfirm != "" {
-			m.ai.confirm(false)
-		}
 	default:
 		ni, cmd := m.ai.request.Update(msg)
 		m.ai.request = ni
@@ -974,19 +960,6 @@ func (m *model) loadHistory(cur *connData) tea.Cmd {
 		rows, err := m.store.List(50)
 		return historyLoadedMsg{Rows: rows, Err: err}
 	}
-}
-
-// railIsText reports whether the active rail tab accepts text input (the AI
-// request line, or a row field being edited/raw), so q/? don't hijack it.
-func (m *model) railIsText() bool {
-	cur := m.conns[m.active]
-	switch cur.railTab {
-	case focusAI:
-		return true
-	case focusRow:
-		return cur.row != nil && (cur.row.editing || cur.row.raw)
-	}
-	return false
 }
 
 // doUndo restores an action from the log via RowEditor.Undo, marks it Undone,
