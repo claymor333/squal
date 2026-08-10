@@ -64,6 +64,16 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS turns (
+		rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+		connection TEXT NOT NULL,
+		tool TEXT NOT NULL,
+		args_json TEXT NOT NULL,
+		result TEXT NOT NULL
+	)`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
