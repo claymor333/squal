@@ -212,6 +212,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
+	case tea.MouseMsg:
+		m.handleMouse(msg)
+		return m, nil
+
 	case schemaLoadedMsg:
 		if msg.idx < 0 || msg.idx >= len(m.conns) {
 			if msg.conn != nil {

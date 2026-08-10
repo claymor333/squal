@@ -10,6 +10,7 @@ routes keys and messages. Panes talk to the DB only through the services
 |------|------|
 | `model.go` | root model: tabs, focus, keymap, batch pump, connection + AI wiring |
 | `messages.go` | ALL shared `tea.Msg` types + `paneFocus` |
+| `mouse.go` | `paneLayout` (Y-bounds per pane), `handleMouse` (click focus, click-select, wheel scroll) |
 | `schema_pane.go` | DB/table tree → `browseRequestMsg` |
 | `editor.go` | multiline SQL editor + history → `runQueryMsg` |
 | `results.go` | virtualized grid on `Columnar` |
@@ -23,6 +24,10 @@ routes keys and messages. Panes talk to the DB only through the services
 ## Invariants (do not break)
 
 - **Msg types live in `messages.go`, never inline in a pane.**
+- **Mouse layout is computed, not hardcoded.** `paneLayout` derives pane Y-bounds
+  from rendered line counts (schema body height varies with the tree). If the View
+  layout changes (new pane, reordering), update `newPaneLayout` + `schemaBodyLines`
+  and the mouse tests together.
 - **Panes are pure-ish**: mutate `connData`, emit `tea.Msg`s, return `tea.Cmd`s.
   They don't hold a `*sql.DB`.
 - **The batch pump orders reads.** The fetch goroutine appends into `Columnar`;

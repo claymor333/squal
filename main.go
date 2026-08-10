@@ -25,7 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(tui.New(cfg, cfg.Profiles), tea.WithAltScreen())
+	p := tea.NewProgram(tui.New(cfg, cfg.Profiles), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
 	}
