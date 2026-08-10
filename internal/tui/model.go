@@ -51,6 +51,7 @@ func openConnection(idx int, p config.Profile) tea.Cmd {
 		}
 		dbs, err := c.Schema(context.Background(), false)
 		if err != nil {
+			c.Close()
 			return schemaLoadedMsg{idx: idx, err: err}
 		}
 		return schemaLoadedMsg{idx: idx, conn: c, dbs: dbs}
