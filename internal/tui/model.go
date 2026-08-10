@@ -516,13 +516,12 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConnectKey(msg)
 	}
 	if m.help {
+		// help is a menu: any key dismisses it. esc stops there; any other key
+		// is then processed normally, so "F1 then 1" opens the rail.
+		m.help = false
 		if msg.String() == "esc" {
-			m.help = false
-		}
-		if msg.String() != "ctrl+c" {
 			return m, nil
 		}
-		// ctrl+c quits even from the help overlay
 	}
 	if m.confirm != nil {
 		// modal: y approves, n/esc cancels, ctrl+c falls through to quit.
@@ -566,7 +565,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.focus = m.prevFocus()
 		return m, nil
-	case "L":
+	case "L", "l":
 		m.railCollapsed = !m.railCollapsed
 		return m, nil
 	case "u":
@@ -575,24 +574,24 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.focus = focusRail
 		return m, m.activateRail(m.conns[m.active], focusHistory)
-	case "1":
+	case "1", "2", "3":
+		// digits are text input in the editor and in the rail's ai/row-edit
+		// tabs; elsewhere they switch the rail tab.
+		if m.focus == focusEditor || (m.focus == focusRail && m.railIsText()) {
+			break
+		}
 		if m.active < 0 || m.active >= len(m.conns) {
 			return m, nil
 		}
-		m.focus = focusRail
-		return m, m.activateRail(m.conns[m.active], focusRow)
-	case "2":
-		if m.active < 0 || m.active >= len(m.conns) {
-			return m, nil
+		tab := focusRow
+		switch msg.String() {
+		case "2":
+			tab = focusHistory
+		case "3":
+			tab = focusAI
 		}
 		m.focus = focusRail
-		return m, m.activateRail(m.conns[m.active], focusHistory)
-	case "3":
-		if m.active < 0 || m.active >= len(m.conns) {
-			return m, nil
-		}
-		m.focus = focusRail
-		return m, m.activateRail(m.conns[m.active], focusAI)
+		return m, m.activateRail(m.conns[m.active], tab)
 	case "q":
 		text := m.focus == focusEditor || (m.focus == focusRail && m.railIsText())
 		if text || m.active < 0 || m.active >= len(m.conns) {

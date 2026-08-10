@@ -382,6 +382,61 @@ func TestToastSetAndCleared(t *testing.T) {
 	}
 }
 
+// TestHelpDismissesOnActionKey: the help overlay is a menu — any key closes it
+// and is then processed, so "F1 then 1" opens the rail instead of doing nothing.
+func TestHelpDismissesOnActionKey(t *testing.T) {
+	m := newModelForTest(1)
+	m.help = true
+	m.focus = focusSchema
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if m.help {
+		t.Fatal("any key should dismiss help")
+	}
+	if !m.conns[0].railOpen || m.conns[0].railTab != focusHistory {
+		t.Fatal("the key should then be processed (open hist tab)")
+	}
+}
+
+// TestDigitsTypeInEditor: 1/2/3 are SQL text in the editor, not rail switches.
+func TestDigitsTypeInEditor(t *testing.T) {
+	m := newModelForTest(1)
+	m.conns[m.active].ed = newEditor()
+	m.focus = focusEditor
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	if m.conns[m.active].railOpen {
+		t.Fatal("1 in the editor should not open the rail")
+	}
+	if got := m.conns[m.active].ed.text(); got != "1" {
+		t.Fatalf("editor text = %q, want 1", got)
+	}
+}
+
+// TestRailRendersWhenOpen: opening the rail must put a visible rail box in the
+// frame that stays inside the window.
+func TestRailRendersWhenOpen(t *testing.T) {
+	m := newModelForTest(1)
+	m.width, m.height = 100, 26
+	cur := m.conns[0]
+	cur.results = newResultsView(colsData())
+	m.focus = focusResults
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	out := m.View()
+	if !strings.Contains(out, "rail") || !strings.Contains(out, "[row]") {
+		t.Fatalf("rail not rendered: %q", out)
+	}
+	if lineCount(out) > m.height {
+		t.Fatalf("rail overflowed: %d > %d", lineCount(out), m.height)
+	}
+}
+
+func TestLowercaseLCollapses(t *testing.T) {
+	m := newModelForTest(1)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !m.railCollapsed {
+		t.Fatal("lowercase l should also collapse the left rail")
+	}
+}
+
 // TestViewNeverOverflows renders every pane (a large expanded schema tree, a
 // loaded results grid) into a small window and asserts the output fits.
 func TestViewNeverOverflows(t *testing.T) {
