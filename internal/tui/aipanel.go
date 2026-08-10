@@ -44,10 +44,16 @@ type aiPanel struct {
 	pendingConfirmCh chan bool // answered by model.handleKey y/n; nil when no confirm pending
 	events           []aiEventMsg
 	history          []string
+	maxLines         int // transcript/panel height (set by the layout)
 }
 
 func newAIPanel() *aiPanel {
 	return &aiPanel{mode: modeAsk}
+}
+
+// SetLines bounds the panel height; the transcript scrolls when it overflows.
+func (p *aiPanel) SetLines(n int) {
+	p.maxLines = n
 }
 
 func (p *aiPanel) toggleMode() {
@@ -107,11 +113,16 @@ func (p *aiPanel) runQuick(ctx context.Context) tea.Cmd {
 
 const quickPrompt = `You translate natural language into MariaDB/MySQL SQL. Return ONLY the SQL.`
 
+// view renders the panel: mode label + request on the first line, then the
+// tool-call transcript capped at maxLines, then the write-confirm prompt.
 func (p *aiPanel) view() string {
 	var b strings.Builder
-	mode := "[Ask]"
+	mode := "Ask AI"
 	if p.mode == modeQuick {
-		mode = "[Quick]"
+		mode = "NL→SQL"
+	}
+	if p.running {
+		mode = "… " + mode
 	}
 	b.WriteString(styleAccent.Render(mode) + " " + p.request + "\n")
 	for _, e := range p.events {
@@ -129,5 +140,13 @@ func (p *aiPanel) view() string {
 	if p.pendingConfirm != "" {
 		b.WriteString(styleErr.Render("⚠ confirm "+p.pendingConfirm+"? (y/n)") + "\n")
 	}
-	return b.String()
+	out := b.String()
+	if p.maxLines > 1 {
+		lines := strings.Split(out, "\n")
+		if len(lines) > p.maxLines {
+			lines = lines[len(lines)-p.maxLines:]
+		}
+		out = strings.Join(lines, "\n")
+	}
+	return out
 }

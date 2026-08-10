@@ -199,14 +199,12 @@ new commit/PR that reverses the change.
 
 ## Known gaps (not bugs — tracked scope)
 
-The reading half is MVP-grade; the interactive write half is **built but partially
-unwired**. Tracked as GitHub issues in `claymor333/squal`:
+The reading half is MVP-grade; the write half is now reachable but not polished.
+Tracked as GitHub issues in `claymor333/squal`:
 
-- **Row panel is unreachable** — `rowpanel.go` exists but no key opens it on a
-  highlighted row. (#1)
-- **Hand-driven writes not dispatched** — `writer.runTypedSQL` and `saveRowMsg`/
-  `deleteRowMsg`/`undoActionMsg` are defined but not bound in `model.handleKey`.
-  (The AI agent reaches the undo contract through its own tools.) (#2)
+- **Row panel + hand-driven writes are wired** (#1, #2 closed in the 2026-08-10
+  TUI rework): `enter`/`o` on a browsed row opens the right-side row panel, `s`
+  saves, `delete` confirms, `u` opens the history panel for undo.
 - **Deferred polish**: NULL vs empty-string handling in the row panel (#3),
   expandable BLOB/JSON cells (#4), column headers + horizontal scroll (#5),
   searchable history (#6), AI confirm-dialog polish (#7), AI session persistence

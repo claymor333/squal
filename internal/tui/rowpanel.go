@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// rowPanel is the right-side detail editor for a highlighted row (SPEC §5).
+// Each field is shown as name: value with a cursor; enter starts inline editing
+// of the current field, r toggles the raw-JSON textarea.
 type rowPanel struct {
 	names   []string
 	vals    map[string]string
@@ -14,6 +17,7 @@ type rowPanel struct {
 	raw     bool
 	rawBuf  string
 	editing bool
+	editBuf []rune
 }
 
 func newRowPanel() *rowPanel {
@@ -30,6 +34,7 @@ func (p *rowPanel) SetRow(row map[string]string) {
 	p.cur = 0
 	p.raw = false
 	p.editing = false
+	p.editBuf = p.editBuf[:0]
 }
 
 func (p *rowPanel) moveDown() {
@@ -57,9 +62,39 @@ func (p *rowPanel) editValue(v string) {
 	}
 }
 
+// startEdit begins inline editing of the current field, seeded with its value.
+func (p *rowPanel) startEdit() {
+	if p.cur >= len(p.names) {
+		return
+	}
+	p.editBuf = []rune(p.vals[p.names[p.cur]])
+	p.editing = true
+}
+
+func (p *rowPanel) appendEdit(r rune) {
+	p.editBuf = append(p.editBuf, r)
+}
+
+func (p *rowPanel) backspaceEdit() {
+	if len(p.editBuf) > 0 {
+		p.editBuf = p.editBuf[:len(p.editBuf)-1]
+	}
+}
+
+// commitEdit writes the edited buffer back to the current field.
+func (p *rowPanel) commitEdit() {
+	p.editValue(string(p.editBuf))
+	p.editing = false
+}
+
+func (p *rowPanel) cancelEdit() {
+	p.editing = false
+	p.editBuf = p.editBuf[:0]
+}
+
 func (p *rowPanel) toggleRaw() {
 	if !p.raw {
-		// enter raw mode with current JSON
+		// enter raw mode with the current JSON
 		b, _ := json.Marshal(p.vals)
 		p.rawBuf = string(b)
 		p.raw = true
@@ -90,17 +125,27 @@ func (p *rowPanel) Values() (map[string]string, error) {
 	return p.vals, nil
 }
 
+// view renders the current edit mode: raw JSON, an inline field edit, or the
+// field list.
 func (p *rowPanel) view() string {
-	if p.raw {
+	switch {
+	case p.raw:
 		return p.rawBuf
-	}
-	var b strings.Builder
-	for i, n := range p.names {
-		mark := " "
-		if i == p.cur {
-			mark = "▸"
+	case p.editing:
+		name, _ := p.current()
+		mark := "▸"
+		return fmt.Sprintf("%s %s: %s█\n%s", mark, name, string(p.editBuf),
+			styleDim.Render("enter commit · esc cancel"))
+	default:
+		var b strings.Builder
+		for i, n := range p.names {
+			mark := " "
+			if i == p.cur {
+				mark = "▸"
+			}
+			fmt.Fprintf(&b, "%s %s: %s\n", mark, n, p.vals[n])
 		}
-		fmt.Fprintf(&b, "%s %q: %q\n", mark, n, p.vals[n])
+		b.WriteString(styleDim.Render("enter edit · r raw · s save · esc close"))
+		return b.String()
 	}
-	return b.String()
 }

@@ -1,26 +1,27 @@
 package tui
 
-import "testing"
+import (
+	"testing"
 
-func TestHistoryListUndoSelect(t *testing.T) {
-	h := newHistoryView([]historyRow{
-		{ID: "a", Label: "update users", Verdict: "undoable", Status: "applied"},
-		{ID: "b", Label: "DELETE FROM x", Verdict: "logged-only", Status: "applied"},
+	"github.com/claymor333/squal/internal/state"
+)
+
+func TestHistorySetActions(t *testing.T) {
+	h := newHistoryView(nil)
+	h.SetActions([]*state.Action{
+		{ID: "a1", Kind: "update", Table: "users", Verdict: state.Undoable, Status: state.Applied},
+		{ID: "a2", Kind: "delete", Table: "orders", Verdict: state.LoggedOnly, Status: state.Applied},
 	})
-	if h.cursor != 0 {
-		t.Fatalf("cursor = %d", h.cursor)
+	if len(h.rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(h.rows))
+	}
+	if h.rows[0].Label != "update users" || h.rows[1].Verdict != "logged-only" {
+		t.Fatalf("rows = %+v", h.rows)
 	}
 	h.moveDown()
-	if h.cursor != 1 {
-		t.Fatalf("cursor after move = %d", h.cursor)
-	}
-	h.moveUp()
 	msg := h.selectRow()
-	um, ok := msg.(undoActionMsg)
-	if !ok {
-		t.Fatalf("selectRow = %T, want undoActionMsg", msg)
-	}
-	if um.ID != "a" {
-		t.Fatalf("undo id = %q", um.ID)
+	ua, ok := msg.(undoActionMsg)
+	if !ok || ua.ID != "a2" {
+		t.Fatalf("selectRow = %#v, want undoActionMsg{a2}", msg)
 	}
 }
