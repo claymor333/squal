@@ -16,9 +16,10 @@ import (
 // --- messages ---------------------------------------------------------------
 
 type schemaLoadedMsg struct {
-	idx int
-	dbs []db.Database
-	err error
+	idx  int
+	conn *db.Conn
+	dbs  []db.Database
+	err  error
 }
 
 type connClosedMsg struct {
@@ -52,7 +53,7 @@ func openConnection(idx int, p config.Profile) tea.Cmd {
 		if err != nil {
 			return schemaLoadedMsg{idx: idx, err: err}
 		}
-		return schemaLoadedMsg{idx: idx, dbs: dbs}
+		return schemaLoadedMsg{idx: idx, conn: c, dbs: dbs}
 	}
 }
 
@@ -143,6 +144,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case schemaLoadedMsg:
 		if msg.idx < 0 || msg.idx >= len(m.conns) {
+			if msg.conn != nil {
+				msg.conn.Close()
+			}
 			return m, nil
 		}
 		c := m.conns[msg.idx]
@@ -150,7 +154,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			c.loadErr = msg.err
 			m.lastErr = msg.err
+			if msg.conn != nil {
+				msg.conn.Close()
+			}
 		} else {
+			c.conn = msg.conn
 			c.dbs = msg.dbs
 			c.loadErr = nil
 			c.pane = newSchemaPane(msg.dbs)
