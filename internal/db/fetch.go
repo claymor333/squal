@@ -37,7 +37,36 @@ func (c *Conn) Fetch(ctx context.Context, query string, batchSize int, args ...a
 	if err != nil {
 		return nil, nil, err
 	}
+	return fetchRows(ctx, rows, batchSize)
+}
 
+// FetchOn streams a query against a dedicated connection whose default schema is
+// set to dbName (USE) for the duration of the query. Unqualified SQL in the query
+// resolves against dbName. The pool is bypassed because a USE on a pooled
+// connection would not persist across calls.
+func (c *Conn) FetchOn(ctx context.Context, dbName, query string, batchSize int, args ...any) (*Columnar, <-chan Batch, error) {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "USE "+QuoteIdentifier(dbName)); err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	// rows is bound to conn; closing rows (in fetchRows) returns conn to the pool.
+	return fetchRows(ctx, rows, batchSize)
+}
+
+// fetchRows runs the shared streaming pipeline over an open *sql.Rows.
+func fetchRows(ctx context.Context, rows *sql.Rows, batchSize int) (*Columnar, <-chan Batch, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		rows.Close()

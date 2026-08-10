@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/claymor333/squal/internal/config"
+	"github.com/claymor333/squal/internal/db"
 )
 
 func TestModelTabSwitch(t *testing.T) {
@@ -58,6 +59,31 @@ func TestEditorEnterRunsQuery(t *testing.T) {
 	}
 	if len(cur.ed.history) != 1 || cur.ed.history[0] != "SELECT 1" {
 		t.Fatalf("history = %v", cur.ed.history)
+	}
+}
+
+func TestSchemaNavigationSetsCurrentDB(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	cur.pane = newSchemaPane([]db.Database{
+		{Name: "app", Tables: []db.Table{{Name: "users"}}},
+		{Name: "blog", Tables: []db.Table{{Name: "posts"}}},
+	})
+	m.focus = focusSchema
+
+	// cursor starts on the first db header
+	if cur.currentDB != "" {
+		t.Fatalf("initial currentDB = %q, want empty", cur.currentDB)
+	}
+	// move down -> second db
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if cur.currentDB != "blog" {
+		t.Fatalf("currentDB = %q, want blog", cur.currentDB)
+	}
+	// move up -> back to first db
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if cur.currentDB != "app" {
+		t.Fatalf("currentDB = %q, want app", cur.currentDB)
 	}
 }
 

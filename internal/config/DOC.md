@@ -13,6 +13,10 @@ JSON config, mode 0600, env overrides. Never commit it.
 - **Credentials never enter source, history, or commit messages.** File is 0600.
 - **Env overrides file**: `SQUAL_OPENAI_API_KEY` wins over the file key;
   `SQUAL_CONFIG` overrides the default path.
+- **`Profile.Database` is optional** — it's a default-schema hint only. The TUI
+  shows all databases the credentials can see (`SHOW DATABASES`); the database
+  selected in the tree (`connData.currentDB`) is the primary source for
+  unqualified editor queries via `db.FetchOn`.
 - **`AddProfile` upserts by name; `RemoveProfile` is an in-place filter.**
 - No secrets in shell history when launching.
 

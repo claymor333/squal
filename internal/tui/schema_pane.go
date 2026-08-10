@@ -100,6 +100,14 @@ func (p *schemaPane) selectCurrent() any {
 	return nil
 }
 
+// currentDatabase returns the database the cursor is on (or the last selected).
+func (p *schemaPane) currentDatabase() string {
+	if p.dbIndex < len(p.dbs) {
+		return p.dbs[p.dbIndex].Name
+	}
+	return ""
+}
+
 func browseQuery(dbName, table string, pk []string) string {
 	q := fmt.Sprintf("SELECT * FROM %s.%s", db.QuoteIdentifier(dbName), db.QuoteIdentifier(table))
 	if len(pk) > 0 {

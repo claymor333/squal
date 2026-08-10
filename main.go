@@ -21,7 +21,8 @@ func main() {
 	if len(cfg.Profiles) == 0 {
 		fmt.Fprintln(os.Stderr, "No connection profiles configured.")
 		fmt.Fprintln(os.Stderr, "Add profiles to "+configPathHint())
-		fmt.Fprintln(os.Stderr, "Profile JSON: {\"name\",\"host\",\"port\",\"user\",\"password\",\"database\"}")
+		fmt.Fprintln(os.Stderr, "Profile JSON: {\"name\",\"host\",\"port\",\"user\",\"password\"}")
+		fmt.Fprintln(os.Stderr, "database is optional — the TUI's selected database becomes the default schema.")
 		os.Exit(1)
 	}
 

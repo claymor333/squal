@@ -44,6 +44,7 @@ type connData struct {
 	wr          *writer
 	results     *resultsView
 	browse      *browseRequestMsg // table browsed by the current results, for load-next
+	currentDB   string            // database selected in the tree; default schema for unqualified SQL
 	job         *fetchJob
 	queryStart  time.Time
 	lastElapsed string
@@ -332,16 +333,20 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "up":
 			if cur.pane != nil {
 				cur.pane.moveUp()
+				cur.currentDB = cur.pane.currentDatabase()
 			}
 		case "down":
 			if cur.pane != nil {
 				cur.pane.moveDown()
+				cur.currentDB = cur.pane.currentDatabase()
 			}
 		case "enter":
 			if cur.pane != nil && cur.conn != nil {
+				cur.currentDB = cur.pane.currentDatabase()
 				if req, ok := cur.pane.selectCurrent().(browseRequestMsg); ok {
 					if rq, ok := m.onBrowse(req).(runQueryMsg); ok {
 						cur.browse = &req
+						cur.currentDB = req.Database
 						return m, m.startFetch(context.Background(), rq.SQL)
 					}
 				}
@@ -462,11 +467,20 @@ func (m *model) handleConnectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // --- query pipeline ----------------------------------------------------------
 
-// startFetch launches db.Fetch on a goroutine and returns the cmd that pumps
-// batches into the tea event loop as batchMsg values.
+// startFetch launches a query on a goroutine and returns the cmd that pumps
+// batches into the tea event loop as batchMsg values. When the active tab has a
+// currentDB selected in the tree, the query runs with that default schema
+// (FetchOn) so unqualified SQL resolves against the selected database.
 func (m *model) startFetch(ctx context.Context, sql string) tea.Cmd {
 	cur := m.conns[m.active]
-	col, ch, err := cur.conn.Fetch(ctx, sql, 1000)
+	var col *db.Columnar
+	var ch <-chan db.Batch
+	var err error
+	if cur.browse == nil && cur.currentDB != "" {
+		col, ch, err = cur.conn.FetchOn(ctx, cur.currentDB, sql, 1000)
+	} else {
+		col, ch, err = cur.conn.Fetch(ctx, sql, 1000)
+	}
 	if err != nil {
 		cur.job = nil
 		return func() tea.Msg { return queryDoneMsg{Err: err} }

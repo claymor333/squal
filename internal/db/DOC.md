@@ -8,7 +8,7 @@ metadata. Writes live in the sibling `db/mutate` package.
 | File | Role |
 |------|------|
 | `conn.go` | `Conn` (pooled `*sql.DB`), DSN builder, `BeginTx` |
-| `fetch.go` | `Columnar` (column-major), `Fetch` (batched streaming over a channel) |
+| `fetch.go` | `Columnar` (column-major), `Fetch` (batched streaming), `FetchOn` (dedicated conn + USE), `fetchRows` (shared pipeline) |
 | `schema.go` | `Schema`, `Columns`, `PrimaryKey`, `QuoteIdentifier`, `Database`/`Table`/`Column` |
 
 ## Invariants (do not break)
@@ -23,6 +23,10 @@ metadata. Writes live in the sibling `db/mutate` package.
 - **Quote identifiers** with `QuoteIdentifier`; positional `?` args only.
 - **`Fetch` appends into the caller's `Columnar`.** The caller may read values only
   after a `Batch` arrives on the channel (send/receive orders the writes).
+- **`FetchOn` uses a dedicated `sql.Conn` + `USE`** so unqualified SQL resolves
+  against a chosen database. Do NOT replace it with `USE` on the pool — a pooled
+  connection doesn't keep the session between calls. `fetchRows` is the shared
+  streaming body; both `Fetch` and `FetchOn` must flow through it.
 
 ## Change here
 
