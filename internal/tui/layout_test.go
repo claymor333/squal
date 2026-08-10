@@ -62,6 +62,18 @@ func TestLayoutRailShrinksOnNarrowWindow(t *testing.T) {
 	}
 }
 
+func TestLayoutRailMinimized(t *testing.T) {
+	l := newLayout()
+	rs := l.rects(120, 40, focusResults, false, false, 1)
+	// closed rail is a thin strip, not zero width
+	if rs.rail.W != railMinWidth {
+		t.Fatalf("minimized rail width = %d, want %d", rs.rail.W, railMinWidth)
+	}
+	if rs.editor.W != 92-railMinWidth {
+		t.Fatalf("stage should shrink by the minimized rail: %d", rs.editor.W)
+	}
+}
+
 func TestLayoutCollapseGivesSchemaWidthToStage(t *testing.T) {
 	l := newLayout()
 	rs := l.rects(120, 40, focusResults, true, true, 1)

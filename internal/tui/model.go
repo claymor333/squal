@@ -1245,9 +1245,12 @@ func (m *model) View() string {
 		paneBox("results", m.focus == focusResults, resultsBody, rs.results.W, rs.results.H),
 	)
 
-	// Context rail: tab strip + active tab body.
+	// Context rail: tab strip + active tab body when open, a thin strip of tab
+	// indicators when minimized. It is always on screen.
 	if cur.railOpen {
 		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, rightCol, m.railBox(cur, rs.rail))
+	} else {
+		rightCol = lipgloss.JoinHorizontal(lipgloss.Top, rightCol, m.railMinBox(cur, rs.rail))
 	}
 	if !m.railCollapsed {
 		out.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, body.String(), rightCol))
@@ -1351,6 +1354,28 @@ func railTabLabel(tab, active paneFocus) string {
 		return styleAccent.Render("[" + label + "]")
 	}
 	return styleDim.Render(label)
+}
+
+// railMinBox renders the minimized rail: a thin strip listing the three tabs so
+// the user can see it is there and click one to expand + activate.
+func (m *model) railMinBox(cur *connData, rail rect) string {
+	var b strings.Builder
+	for _, tab := range []paneFocus{focusRow, focusHistory, focusAI} {
+		label := "row"
+		switch tab {
+		case focusHistory:
+			label = "hist"
+		case focusAI:
+			label = "ai"
+		}
+		if tab == cur.railTab {
+			fmt.Fprintf(&b, "%s\n", styleAccent.Render("▸ "+label))
+		} else {
+			fmt.Fprintf(&b, "%s\n", styleDim.Render("  "+label))
+		}
+	}
+	b.WriteString(styleDim.Render("alt+0"))
+	return paneBox("rail", false, b.String(), rail.W, rail.H)
 }
 
 // renderTabs draws the connection tabs, highlighting the active one.

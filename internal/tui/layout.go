@@ -53,10 +53,13 @@ func lineCount(s string) int {
 
 // Fixed pane widths so the layout never reflows as focus moves. The left and
 // context rails keep these widths on any normal-size terminal; they degrade
-// only when the window is too narrow to leave the stage a usable minimum.
+// only when the window is too narrow to leave the stage a usable minimum. The
+// context rail is always present — when closed it collapses to a thin strip of
+// tab indicators instead of disappearing entirely.
 const (
 	schemaColWidth = 28
 	railColWidth   = 42
+	railMinWidth   = 10
 	stageMinWidth  = 48
 )
 
@@ -133,6 +136,15 @@ func (l *layout) rects(w, h int, focus paneFocus, railOpen, railCollapsed bool, 
 		if rw < 15 {
 			rw = 15
 		}
+		if rw > rightW-1 {
+			rw = rightW - 1
+		}
+		rs.rail = rect{X: rightX + rightW - rw, Y: 1, W: rw, H: bodyH}
+		rs.editor.W = rightW - rw
+		rs.results.W = rightW - rw
+	} else {
+		// minimized: a thin strip of tab indicators, never zero width
+		rw := railMinWidth
 		if rw > rightW-1 {
 			rw = rightW - 1
 		}

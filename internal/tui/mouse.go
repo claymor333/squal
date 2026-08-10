@@ -38,10 +38,19 @@ func (m *model) handleMouse(msg tea.MouseMsg) {
 		return
 	}
 	switch {
-	case rs.rail.contains(msg.X, msg.Y) && cur.railOpen:
+	case rs.rail.contains(msg.X, msg.Y):
 		m.focus = focusRail
-		if msg.Y == rs.rail.Y+1 { // the tab strip line
-			m.setRailTabByX(msg.X, rs.rail)
+		if cur.railOpen {
+			if msg.Y == rs.rail.Y+1 { // the tab strip line
+				m.setRailTabByX(msg.X, rs.rail)
+			}
+		} else if msg.Y >= rs.rail.Y+2 {
+			// minimized: clicking a tab row expands the rail on that tab.
+			row := msg.Y - rs.rail.Y - 2
+			tabs := []paneFocus{focusRow, focusHistory, focusAI}
+			if row >= 0 && row < len(tabs) {
+				m.activateRail(cur, tabs[row])
+			}
 		}
 	case rs.results.contains(msg.X, msg.Y) && cur.results != nil:
 		m.focus = focusResults
