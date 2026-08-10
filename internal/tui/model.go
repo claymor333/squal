@@ -36,6 +36,7 @@ type connData struct {
 	loadErr     error
 	pane        *schemaPane
 	ed          *editor
+	wr          *writer
 	results     *resultsView
 	browse      *browseRequestMsg // table browsed by the current results, for load-next
 	job         *fetchJob
@@ -163,6 +164,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c.dbs = msg.dbs
 			c.loadErr = nil
 			c.pane = newSchemaPane(msg.dbs)
+			c.wr = newWriter(msg.conn, nil, nil) // store + editor injected with the structured-edit tasks
 		}
 		return m, nil
 

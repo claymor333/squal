@@ -49,6 +49,12 @@ func (c *Conn) ExecContext(ctx context.Context, q string, args ...any) (sql.Resu
 	return c.db.ExecContext(ctx, q, args...)
 }
 
+// BeginTx starts a transaction on a pooled connection. Used by the undo
+// contract to run before-image capture + write atomically.
+func (c *Conn) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	return c.db.BeginTx(ctx, nil)
+}
+
 func buildDSN(p config.Profile) (string, error) {
 	if p.Socket != "" {
 		return fmt.Sprintf("%s@unix(%s)/%s?parseTime=true", p.User, p.Socket, p.Database), nil
