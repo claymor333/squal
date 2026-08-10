@@ -55,6 +55,13 @@ type connData struct {
 	lastElapsed string
 }
 
+// newConnData builds a connection with the context rail open on the AI tab by
+// default — the rail is always on screen unless the user closes it manually
+// (esc) and reopens it (alt+1/2/3 or an action).
+func newConnData(p config.Profile) *connData {
+	return &connData{profile: p, railOpen: true, railTab: focusAI}
+}
+
 func openConnection(idx int, p config.Profile) tea.Cmd {
 	return func() tea.Msg {
 		c, err := db.Open(context.Background(), p)
@@ -166,7 +173,7 @@ func (c *confirmModal) view() string {
 func New(cfg *config.Config, profiles []config.Profile) *model {
 	m := &model{cfg: cfg, focus: focusSchema, ai: newAIPanel()}
 	for i, p := range profiles {
-		m.conns = append(m.conns, &connData{profile: p, loading: true, ed: newEditor()})
+		m.conns = append(m.conns, &connData{profile: p, loading: true, ed: newEditor(), railOpen: true, railTab: focusAI})
 		m.active = i
 	}
 	return m
@@ -932,7 +939,7 @@ func (m *model) handleConnectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		idx := len(m.conns)
-		m.conns = append(m.conns, &connData{profile: p, loading: true, ed: newEditor()})
+		m.conns = append(m.conns, &connData{profile: p, loading: true, ed: newEditor(), railOpen: true, railTab: focusAI})
 		m.active = idx
 		return m, openConnection(idx, p)
 	case "tab":

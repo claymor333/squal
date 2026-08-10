@@ -114,7 +114,7 @@ func TestSchemaNavigationSetsCurrentDB(t *testing.T) {
 func newModelForTest(count int) *model {
 	m := &model{focus: focusSchema}
 	for i := 0; i < count; i++ {
-		m.conns = append(m.conns, &connData{profile: config.Profile{Name: "t"}})
+		m.conns = append(m.conns, newConnData(config.Profile{Name: "t"}))
 	}
 	return m
 }
@@ -403,18 +403,20 @@ func TestHelpDismissesOnActionKey(t *testing.T) {
 	}
 }
 
-// TestDigitsTypeInEditor: 1/2/3 are SQL text in the editor, not rail switches —
-// bare digits have no shortcut bindings at all.
+// TestDigitsTypeInEditor: bare digits are SQL text in the editor — they type
+// and must not switch the rail's active tab (which is open by default).
 func TestDigitsTypeInEditor(t *testing.T) {
 	m := newModelForTest(1)
 	m.conns[m.active].ed = newEditor()
 	m.focus = focusEditor
+	cur := m.conns[m.active]
+	cur.railTab = focusAI
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-	if m.conns[m.active].railOpen {
-		t.Fatal("1 in the editor should not open the rail")
-	}
 	if got := m.conns[m.active].ed.text(); got != "1" {
 		t.Fatalf("editor text = %q, want 1", got)
+	}
+	if cur.railTab != focusAI {
+		t.Fatalf("bare 1 must not switch the rail tab: %v", cur.railTab)
 	}
 }
 
@@ -456,6 +458,25 @@ func TestAIRequestTypesBareLetters(t *testing.T) {
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	if got := m.ai.request.Value(); got != "yn" {
 		t.Fatalf("request = %q, want yn (bare letters type)", got)
+	}
+}
+
+// TestRailOpenByDefault: the context rail is always on screen until the user
+// closes it manually (esc while focused); alt+2 reopens it on history.
+func TestRailOpenByDefault(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	if !cur.railOpen {
+		t.Fatal("the context rail should be open by default")
+	}
+	m.focus = focusRail
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
+	if cur.railOpen {
+		t.Fatal("esc should close the rail")
+	}
+	m.handleKey(altKey('2'))
+	if !cur.railOpen || cur.railTab != focusHistory {
+		t.Fatal("alt+2 should reopen the rail on hist")
 	}
 }
 
