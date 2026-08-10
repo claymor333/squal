@@ -70,7 +70,7 @@ func statusView(s statusInfo) string {
 	case focusAI:
 		keys = "type · enter run · alt+a mode · esc interrupt · alt+1/2/3 tab"
 	case focusRail:
-		keys = "alt+1/2/3 tab · esc close"
+		keys = "alt+1/2/3 tab · alt+0 close · esc close"
 	}
 	return styleStatus.Render(label + " | " + keys)
 }

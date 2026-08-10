@@ -594,6 +594,20 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			},
 		}
 		return m, nil
+	case "alt+0":
+		// open/close the context rail from anywhere, one key either way.
+		if m.active < 0 || m.active >= len(m.conns) {
+			return m, nil
+		}
+		cur := m.conns[m.active]
+		if cur.railOpen {
+			cur.railOpen = false
+			if m.focus == focusRail {
+				m.focus = focusResults
+			}
+			return m, nil
+		}
+		return m, m.activateRail(cur, cur.railTab)
 	}
 	if m.active < 0 || m.active >= len(m.conns) {
 		return m, nil

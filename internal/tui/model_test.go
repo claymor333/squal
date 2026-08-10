@@ -480,6 +480,24 @@ func TestRailOpenByDefault(t *testing.T) {
 	}
 }
 
+// TestAltZeroTogglesRail: alt+0 opens/closes the rail from anywhere, and keeps
+// the last active tab when reopening.
+func TestAltZeroTogglesRail(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	m.focus = focusResults
+	cur.railTab = focusHistory
+
+	m.handleKey(altKey('0'))
+	if cur.railOpen {
+		t.Fatal("alt+0 should close an open rail")
+	}
+	m.handleKey(altKey('0'))
+	if !cur.railOpen || cur.railTab != focusHistory {
+		t.Fatalf("alt+0 should reopen the rail on the last tab: %v/%v", cur.railOpen, cur.railTab)
+	}
+}
+
 // TestViewNeverOverflows renders every pane (a large expanded schema tree, a
 // loaded results grid) into a small window and asserts the output fits.
 func TestViewNeverOverflows(t *testing.T) {

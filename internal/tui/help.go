@@ -43,6 +43,7 @@ var (
 	bindGlobal = []key.Binding{
 		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "cycle panes")),
 		key.NewBinding(key.WithKeys("alt+l"), key.WithHelp("alt+l", "collapse left rail")),
+		key.NewBinding(key.WithKeys("alt+0"), key.WithHelp("alt+0", "open/close rail")),
 		key.NewBinding(key.WithKeys("alt+q"), key.WithHelp("alt+q", "close connection")),
 		key.NewBinding(key.WithKeys("F1"), key.WithHelp("F1", "help")),
 		key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "exit")),
