@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/claymor333/squal/internal/ai"
@@ -37,7 +38,7 @@ type aiPanel struct {
 	registry         *ai.Registry
 	session          *ai.Session
 	mode             aiMode
-	request          string
+	request          textinput.Model
 	running          bool
 	cancel           context.CancelFunc
 	pendingConfirm   string
@@ -48,7 +49,10 @@ type aiPanel struct {
 }
 
 func newAIPanel() *aiPanel {
-	return &aiPanel{mode: modeAsk}
+	in := textinput.New()
+	in.Prompt = ""
+	in.Placeholder = "ask a question…"
+	return &aiPanel{mode: modeAsk, request: in}
 }
 
 // SetLines bounds the panel height; the transcript scrolls when it overflows.
@@ -87,7 +91,7 @@ func (p *aiPanel) confirm(ok bool) {
 func (p *aiPanel) runAsk(ctx context.Context) tea.Cmd {
 	p.running = true
 	ctx, p.cancel = context.WithCancel(ctx)
-	user := p.request
+	user := p.request.Value()
 	return func() tea.Msg {
 		answer, err := p.agent.Run(ctx, user)
 		p.running = false
@@ -103,7 +107,7 @@ func (p *aiPanel) runQuick(ctx context.Context) tea.Cmd {
 	p.running = true
 	return func() tea.Msg {
 		defer func() { p.running = false }()
-		sql, err := p.client.Complete(ctx, quickPrompt, p.request)
+		sql, err := p.client.Complete(ctx, quickPrompt, p.request.Value())
 		if err != nil {
 			return aiEventMsg{Err: err}
 		}
@@ -124,7 +128,7 @@ func (p *aiPanel) view() string {
 	if p.running {
 		mode = "… " + mode
 	}
-	b.WriteString(styleAccent.Render(mode) + " " + p.request + "\n")
+	b.WriteString(styleAccent.Render(mode) + " " + p.request.View() + "\n")
 	for _, e := range p.events {
 		switch {
 		case e.Tool != "" && e.Result == "":

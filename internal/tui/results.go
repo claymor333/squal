@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/claymor333/squal/internal/db"
 )
 
@@ -19,6 +22,7 @@ type resultsView struct {
 	top        int // first visible row index into order
 	selRow     int // selected display row (relative to top)
 	viewport   int // data rows visible without scrolling
+	tbl        table.Model
 	loading    bool
 	err        error
 	done       bool
@@ -26,7 +30,13 @@ type resultsView struct {
 }
 
 func newResultsView(data *db.Columnar) *resultsView {
-	r := &resultsView{data: data, sortCol: -1, sortAsc: true, selCol: 0, viewport: 8}
+	tbl := table.New()
+	styles := table.DefaultStyles()
+	styles.Header = styles.Header.Bold(true).Foreground(lipgloss.Color("214"))
+	styles.Selected = styles.Selected.Background(lipgloss.Color("236")).Foreground(lipgloss.Color("39"))
+	styles.Cell = styles.Cell.Padding(0, 0)
+	tbl.SetStyles(styles)
+	r := &resultsView{data: data, sortCol: -1, sortAsc: true, selCol: 0, viewport: 8, tbl: tbl}
 	for i := 0; i < data.Rows; i++ {
 		r.order = append(r.order, i)
 	}
@@ -102,9 +112,10 @@ func (r *resultsView) endFilter() {
 	r.filterMode = false
 }
 
-// view renders the grid: header row (cursor column highlighted, sort arrow on
-// the sorted column) then the visible window of data rows, each cell truncated
-// to a width that fits the given pane width.
+// view renders the grid through the bubbles table component: the column
+// cursor and sort arrow live in the header, the window of rows in the body.
+// Sort/filter/scroll state stays in resultsView; the table is a renderer over
+// the visible window, so no internal-scroll drift can hide rows.
 func (r *resultsView) view(w int) string {
 	if r.err != nil {
 		return styleErr.Render("✗ " + r.err.Error())
@@ -120,7 +131,6 @@ func (r *resultsView) view(w int) string {
 	}
 
 	ncols := len(r.data.Columns)
-	// reserve the selection marker (2 cells) and the " │ " separators.
 	cellW := (w - 2 - (ncols-1)*3) / ncols
 	if cellW < 1 {
 		cellW = 1
@@ -129,48 +139,49 @@ func (r *resultsView) view(w int) string {
 		cellW = 64
 	}
 
-	var b strings.Builder
-	for c, col := range r.data.Columns {
-		if c > 0 {
-			b.WriteString(" │ ")
-		}
-		head := col
+	cols := make([]table.Column, ncols)
+	for c, name := range r.data.Columns {
+		title := name
 		if r.sortCol == c {
 			if r.sortAsc {
-				head += " ▲"
+				title += " ▲"
 			} else {
-				head += " ▼"
+				title += " ▼"
 			}
 		}
 		if c == r.selCol {
-			b.WriteString(styleAccent.Render("▸ " + head))
-		} else {
-			b.WriteString(styleDim.Render("  " + head))
+			title = styleAccent.Render("▸ " + title)
 		}
+		cols[c] = table.Column{Title: title, Width: cellW}
 	}
-	if r.filterMode {
-		b.WriteString("   [filter: " + r.filter + "▌]")
-	}
-	b.WriteString("\n")
 
 	end := r.top + r.viewport
 	if end > len(r.order) {
 		end = len(r.order)
 	}
-	for row := r.top; row < end; row++ {
-		mark := "  "
-		if row == r.top+r.selRow {
-			mark = "◉ "
+	rows := make([]table.Row, 0, end-r.top)
+	for i := r.top; i < end; i++ {
+		row := make(table.Row, ncols)
+		for c := range ncols {
+			row[c] = truncate(r.data.Value(c, r.order[i]), cellW)
 		}
-		b.WriteString(mark)
-		for c := range r.data.Columns {
-			if c > 0 {
-				b.WriteString(" │ ")
-			}
-			b.WriteString(truncate(r.data.Value(c, r.order[row]), cellW))
-		}
-		b.WriteString("\n")
+		rows = append(rows, row)
 	}
+
+	r.tbl.SetColumns(cols)
+	r.tbl.SetRows(rows)
+	r.tbl.SetHeight(r.viewport)
+	r.tbl.SetWidth(w)
+	if r.selRow >= len(rows) {
+		r.selRow = len(rows) - 1
+	}
+	r.tbl.SetCursor(r.selRow)
+
+	var b strings.Builder
+	if r.filterMode || r.filter != "" {
+		fmt.Fprintf(&b, "[filter: %s▌]\n", r.filter)
+	}
+	b.WriteString(r.tbl.View())
 	return b.String()
 }
 

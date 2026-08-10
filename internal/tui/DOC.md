@@ -12,14 +12,14 @@ routes keys and messages. Panes talk to the DB only through the services
 | `messages.go` | ALL shared `tea.Msg` types + `paneFocus` (rail tabs: row/hist/ai) |
 | `layout.go` | pure pane-rect computation (five-zone: L/T/B/R/F), `clip`/`fit`/`paneBox` |
 | `mouse.go` | `handleMouse` (rect hit-testing: click focus, click-select, wheel scroll, rail tab click) |
-| `schema_pane.go` | DB/table/column tree (filter + collapse + internal scroll) → `browseRequestMsg` |
-| `editor.go` | multiline SQL editor + history → `runQueryMsg`; default-DB title |
-| `results.go` | virtualized grid on `Columnar`, viewport settable, result-set ring |
+| `schema_pane.go` | DB/table/column tree (filter + collapse + internal scroll) → `browseRequestMsg`; hand-rolled (bubbles has no tree) |
+| `editor.go` | wraps **bubbles textarea** + query history → `runQueryMsg`; default-DB title |
+| `results.go` | grid rendered through **bubbles table** over a `Columnar` window; sort/filter/scroll state local; result-set ring |
 | `rowpanel.go` | row-editing rail tab (inline edit, raw JSON, save) |
 | `history.go` | action history rail tab → `undoActionMsg` |
 | `writer.go` | undo contract executor (the write service); `editorFor` + structured save/delete |
-| `aipanel.go` | Ask/NL→SQL rail tab, confirm dialog, Esc interrupt |
-| `help.go` | `F1`/`?` key-reference overlay |
+| `aipanel.go` | Ask/NL→SQL rail tab (request via **bubbles textinput**), confirm dialog, Esc interrupt |
+| `help.go` | F1 overlay rendered by **bubbles help** from `key.Binding`s |
 | `connect.go` | connection dialog |
 | `statusbar.go` | one-line footer (scoped error slot) + toast line |
 
@@ -34,6 +34,10 @@ routes keys and messages. Panes talk to the DB only through the services
   pads to its rect height and `MaxWidth`-truncates — lipgloss `Width` wraps) to its
   rect; the schema tree scrolls internally; the results viewport is computed, not a
   constant. Anything that renders must stay inside `(w, h)`.
+- **Bubbles components are renderers, not owners.** A component's `Update` returns a
+  new model — always store the result back. Key routing stays in `model.handleKey`;
+  the table is fed the visible window each frame so its internal scroll can't drift
+  from `resultsView.top`.
 - **The context rail is one zone.** row/hist/ai are rail *tabs* (lazily created);
   exactly one is visible at a time. Never stack them back into separate panes.
 - **Panes are pure-ish**: mutate `connData`, emit `tea.Msg`s, return `tea.Cmd`s.

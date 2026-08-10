@@ -6,10 +6,16 @@ import (
 )
 
 func TestHelpListsKeysPerPane(t *testing.T) {
-	out := renderHelp(focusResults, 80, 30)
-	for _, want := range []string{"schema", "editor", "results", "sort", "filter", "rail", "hist", "ai"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("help missing %q", want)
+	res := renderHelp(focusResults, 80, 30)
+	for _, want := range []string{"sort", "filter", "result ring", "open row", "collapse left rail"} {
+		if !strings.Contains(res, want) {
+			t.Fatalf("results help missing %q", want)
+		}
+	}
+	rail := renderHelp(focusRail, 80, 30)
+	for _, want := range []string{"row tab", "hist tab", "ai tab", "close rail"} {
+		if !strings.Contains(rail, want) {
+			t.Fatalf("rail help missing %q", want)
 		}
 	}
 }

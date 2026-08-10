@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/claymor333/squal/internal/db"
 )
 
@@ -94,8 +96,8 @@ func TestResultsViewTruncatesToWidth(t *testing.T) {
 	})
 	out := r.view(20)
 	for _, ln := range strings.Split(out, "\n") {
-		if len([]rune(ln)) > 20 {
-			t.Fatalf("line exceeds 20 cells: %q", ln)
+		if lipgloss.Width(ln) > 20 {
+			t.Fatalf("line exceeds 20 visible cells: %q", ln)
 		}
 	}
 }

@@ -58,8 +58,8 @@ func TestEditorEnterInsertsNewline(t *testing.T) {
 	if len(cur.ed.history) != 0 {
 		t.Fatalf("Enter must not push history: %v", cur.ed.history)
 	}
-	if lineCount(cur.ed.view()) != 2 {
-		t.Fatalf("Enter should insert a newline (editor now %d lines)", lineCount(cur.ed.view()))
+	if !strings.Contains(cur.ed.ta.Value(), "\n") {
+		t.Fatalf("Enter should insert a newline: %q", cur.ed.ta.Value())
 	}
 }
 

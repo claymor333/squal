@@ -914,10 +914,9 @@ func (m *model) railAIKey(msg tea.KeyMsg) tea.Cmd {
 			m.ai.confirm(false)
 		}
 	default:
-		runes := []rune(msg.String())
-		if len(runes) == 1 {
-			m.ai.request += string(runes[0])
-		}
+		ni, cmd := m.ai.request.Update(msg)
+		m.ai.request = ni
+		return cmd
 	}
 	return nil
 }
