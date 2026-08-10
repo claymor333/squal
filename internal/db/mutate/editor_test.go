@@ -1,4 +1,4 @@
-package db
+package mutate
 
 import (
 	"context"
@@ -6,9 +6,10 @@ import (
 	"testing"
 
 	"github.com/claymor333/squal/internal/config"
+	"github.com/claymor333/squal/internal/db"
 )
 
-func testConn(t *testing.T) *Conn {
+func testConn(t *testing.T) *db.Conn {
 	t.Helper()
 	host := os.Getenv("SQUAL_TEST_HOST")
 	if host == "" {
@@ -18,7 +19,7 @@ func testConn(t *testing.T) *Conn {
 	if pass == "" {
 		pass = "webstack"
 	}
-	c, err := Open(context.Background(), config.Profile{
+	c, err := db.Open(context.Background(), config.Profile{
 		Name: "test", Host: host, Port: 3306, User: "webstack",
 		Password: pass, Database: "squal_smoke", Timeout: 5,
 	})

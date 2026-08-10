@@ -1,20 +1,22 @@
-package db
+package mutate
 
 import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/claymor333/squal/internal/db"
 )
 
 type RowEditor struct {
-	conn  *Conn
+	conn  *db.Conn
 	db    string
 	table string
-	cols  []Column
+	cols  []db.Column
 	pk    []string
 }
 
-func NewRowEditor(c *Conn, dbName, table string) (*RowEditor, error) {
+func NewRowEditor(c *db.Conn, dbName, table string) (*RowEditor, error) {
 	cols, err := c.Columns(context.Background(), dbName, table)
 	if err != nil {
 		return nil, err
@@ -62,11 +64,11 @@ func (e *RowEditor) selectByPK(pkVals map[string]string) (string, []any) {
 	conds := make([]string, 0, len(e.pk))
 	args := make([]any, 0, len(e.pk))
 	for _, p := range e.pk {
-		conds = append(conds, QuoteIdentifier(p)+" = ?")
+		conds = append(conds, db.QuoteIdentifier(p)+" = ?")
 		args = append(args, pkVals[p])
 	}
 	return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s",
-		quotedCols(e.cols), QuoteIdentifier(e.db), QuoteIdentifier(e.table),
+		quotedCols(e.cols), db.QuoteIdentifier(e.db), db.QuoteIdentifier(e.table),
 		strings.Join(conds, " AND ")), args
 }
 
@@ -82,7 +84,7 @@ func (e *RowEditor) Update(ctx context.Context, before, after map[string]string)
 		if !ok {
 			continue
 		}
-		sets = append(sets, QuoteIdentifier(col.Name)+" = ?")
+		sets = append(sets, db.QuoteIdentifier(col.Name)+" = ?")
 		args = append(args, v)
 	}
 	if len(sets) == 0 {
@@ -90,11 +92,11 @@ func (e *RowEditor) Update(ctx context.Context, before, after map[string]string)
 	}
 	conds := make([]string, 0, len(e.pk))
 	for _, p := range e.pk {
-		conds = append(conds, QuoteIdentifier(p)+" = ?")
+		conds = append(conds, db.QuoteIdentifier(p)+" = ?")
 		args = append(args, after[p])
 	}
 	res, err := e.conn.ExecContext(ctx, fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s",
-		QuoteIdentifier(e.db), QuoteIdentifier(e.table), strings.Join(sets, ", "), strings.Join(conds, " AND ")), args...)
+		db.QuoteIdentifier(e.db), db.QuoteIdentifier(e.table), strings.Join(sets, ", "), strings.Join(conds, " AND ")), args...)
 	if err != nil {
 		return 0, err
 	}
@@ -106,11 +108,11 @@ func (e *RowEditor) Delete(ctx context.Context, pkVals map[string]string) (int64
 	conds := make([]string, 0, len(e.pk))
 	args := make([]any, 0, len(e.pk))
 	for _, p := range e.pk {
-		conds = append(conds, QuoteIdentifier(p)+" = ?")
+		conds = append(conds, db.QuoteIdentifier(p)+" = ?")
 		args = append(args, pkVals[p])
 	}
 	res, err := e.conn.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s.%s WHERE %s",
-		QuoteIdentifier(e.db), QuoteIdentifier(e.table), strings.Join(conds, " AND ")), args...)
+		db.QuoteIdentifier(e.db), db.QuoteIdentifier(e.table), strings.Join(conds, " AND ")), args...)
 	if err != nil {
 		return 0, err
 	}
@@ -129,12 +131,12 @@ func (e *RowEditor) Undo(ctx context.Context, kind string, pkVals, before, after
 		args := make([]any, 0, len(before))
 		for _, col := range e.cols {
 			if v, ok := before[col.Name]; ok {
-				cols = append(cols, QuoteIdentifier(col.Name))
+				cols = append(cols, db.QuoteIdentifier(col.Name))
 				args = append(args, v)
 			}
 		}
 		_, err := e.conn.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s)",
-			QuoteIdentifier(e.db), QuoteIdentifier(e.table), strings.Join(cols, ", "),
+			db.QuoteIdentifier(e.db), db.QuoteIdentifier(e.table), strings.Join(cols, ", "),
 			strings.TrimSuffix(strings.Repeat("?, ", len(cols)), ", ")), args...)
 		return err
 	case "insert":
@@ -153,10 +155,10 @@ func isPK(pk []string, name string) bool {
 	return false
 }
 
-func quotedCols(cols []Column) string {
+func quotedCols(cols []db.Column) string {
 	out := make([]string, len(cols))
 	for i, c := range cols {
-		out[i] = QuoteIdentifier(c.Name)
+		out[i] = db.QuoteIdentifier(c.Name)
 	}
 	return strings.Join(out, ", ")
 }

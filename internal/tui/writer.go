@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/claymor333/squal/internal/db"
+	"github.com/claymor333/squal/internal/db/mutate"
 	"github.com/claymor333/squal/internal/state"
 )
 
@@ -15,24 +16,21 @@ import (
 type writer struct {
 	conn  *db.Conn
 	store *state.Store
-	ed    *db.RowEditor
+	ed    *mutate.RowEditor
 }
 
-func newWriter(conn *db.Conn, store *state.Store, ed *db.RowEditor) *writer {
+func newWriter(conn *db.Conn, store *state.Store, ed *mutate.RowEditor) *writer {
 	return &writer{conn: conn, store: store, ed: ed}
 }
 
 // classifyForTest is a thin wrapper so the tui package can unit-test the verdict
-// logic without a live DB. (Real path uses db.Classify directly.)
-func classifyForTest(sql string) (*db.UndoVerdict, error) {
-	return db.Classify(sql)
+// logic without a live DB. (Real path uses mutate.Classify directly.)
+func classifyForTest(sql string) (*mutate.UndoVerdict, error) {
+	return mutate.Classify(sql)
 }
 
-// runTypedSQL executes user-typed SQL through the undo contract:
-// feasible -> run in a transaction with a before-image SELECT captured first;
-// infeasible -> run as logged-only. Returns the verdict + any error.
-func (w *writer) runTypedSQL(ctx context.Context, connName, database string, sql string) (*db.UndoVerdict, error) {
-	v, err := db.Classify(sql)
+func (w *writer) runTypedSQL(ctx context.Context, connName, database string, sql string) (*mutate.UndoVerdict, error) {
+	v, err := mutate.Classify(sql)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
@@ -52,7 +50,7 @@ func (w *writer) runTypedSQL(ctx context.Context, connName, database string, sql
 // capturing the before-image rows (locked FOR UPDATE) via the synthesized SELECT,
 // then executing the write and committing. On any error the tx rolls back, so
 // no partial write escapes.
-func (w *writer) executeWithBeforeImage(ctx context.Context, connName, database string, v *db.UndoVerdict) (*db.UndoVerdict, error) {
+func (w *writer) executeWithBeforeImage(ctx context.Context, connName, database string, v *mutate.UndoVerdict) (*mutate.UndoVerdict, error) {
 	tx, err := w.conn.BeginTx(ctx)
 	if err != nil {
 		return v, err
@@ -108,7 +106,7 @@ func captureBefore(ctx context.Context, tx *sql.Tx, selectSQL string) (map[strin
 	return out, nil
 }
 
-func (w *writer) record(v *db.UndoVerdict, connName, database string, before, after map[string]string) {
+func (w *writer) record(v *mutate.UndoVerdict, connName, database string, before, after map[string]string) {
 	if w.store == nil {
 		return
 	}

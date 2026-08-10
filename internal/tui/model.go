@@ -14,6 +14,7 @@ import (
 	"github.com/claymor333/squal/internal/ai"
 	"github.com/claymor333/squal/internal/config"
 	"github.com/claymor333/squal/internal/db"
+	"github.com/claymor333/squal/internal/db/mutate"
 	"github.com/claymor333/squal/internal/state"
 )
 
@@ -510,7 +511,7 @@ func (m *model) handleBatch(msg batchMsg) tea.Cmd {
 	return m.pumpBatch(cur)
 }
 
-// loadNext keyset-paginates the current browse via db.LoadNextSQL. It is a
+// loadNext keyset-paginates the current browse via mutate.LoadNextSQL. It is a
 // no-op unless the active results are a finished fetch of a browsed table with
 // a resolvable primary key.
 func (m *model) loadNext(cur *connData) tea.Cmd {
@@ -530,7 +531,7 @@ func (m *model) loadNext(cur *connData) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	sql, err := db.LoadNextSQL(req.Database, req.Table, pk, lastVals, browseLimit)
+	sql, err := mutate.LoadNextSQL(req.Database, req.Table, pk, lastVals, browseLimit)
 	if err != nil {
 		return nil
 	}

@@ -1,8 +1,9 @@
-package db
+package mutate
 
 import (
 	"fmt"
 
+	"github.com/claymor333/squal/internal/db"
 	"github.com/xwb1989/sqlparser"
 )
 
@@ -51,7 +52,7 @@ func Classify(sql string) (*UndoVerdict, error) {
 		}
 		table := tableName.Name.String()
 		where := upd.Where
-		sel := fmt.Sprintf("SELECT * FROM %s", QuoteIdentifier(table))
+		sel := fmt.Sprintf("SELECT * FROM %s", db.QuoteIdentifier(table))
 		if where != nil {
 			sel += " WHERE " + sqlparser.String(where.Expr)
 		}
@@ -74,7 +75,7 @@ func Classify(sql string) (*UndoVerdict, error) {
 			return &UndoVerdict{Feasible: false, Reason: "subquery table is not undoable"}, nil
 		}
 		table := tableName.Name.String()
-		sel := fmt.Sprintf("SELECT * FROM %s", QuoteIdentifier(table))
+		sel := fmt.Sprintf("SELECT * FROM %s", db.QuoteIdentifier(table))
 		if del.Where != nil {
 			sel += " WHERE " + sqlparser.String(del.Where.Expr)
 		}

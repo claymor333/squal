@@ -45,14 +45,23 @@ path (row panel → editor → undo) is partially wired — see "Known gaps" bel
 main.go
   └─ internal/
      ├─ config/   profiles + AI endpoint. JSON config, 0600, env overrides.
-     ├─ db/       the MariaDB layer: conn, streaming fetch, schema, keyset,
-     │            undo-feasibility classifier, row editor (before/after images).
+     ├─ db/       the MariaDB read layer: conn, streaming fetch, schema.
+     │  └─ mutate/  the write layer: undo classifier, RowEditor, keyset. (db/mutate)
      ├─ state/    app-side SQLite: action log (undo store) + AI transcript.
      ├─ ai/       OpenAI-compatible client + tool-calling agent. No TUI deps.
      └─ tui/      bubbletea app: tabs, panes, keymap, batch pump, AI panel.
 cmd/smoke        integration check against a real MariaDB (the exception to
                  "no verification scripts" — tests cover unit behavior).
 ```
+
+### Per-module docs — the brainstore discipline
+
+Every package has a `DOC.md` sitting next to its code: what it owns, its
+invariants, how to change it, its test command, and a **doc-check** line ("did
+this change touch an invariant above?"). Update the module's `DOC.md` in the same
+change as the code — a change that touches an invariant without updating its doc
+is incomplete. The docs are the contract; the invariants in them are the rules a
+review enforces.
 
 ### Data flow (the one diagram worth remembering)
 
@@ -123,13 +132,21 @@ return `tea.Cmd`s; they don't talk to the DB directly.
 `messages.go`, add a `paneFocus` value, wire Tab cycle + keys in `model.handleKey`,
 render it in `View`. Test the pane logic without a live DB.
 
-### `internal/db` — MariaDB
+### `internal/db` — MariaDB (read)
 
 - **Never** modify `fetch.go`'s `Columnar` layout (column-major) without updating every
   consumer — this bit a plan review (test data was row-major).
 - New SQL: quote identifiers with `QuoteIdentifier`, use positional `?` args. No string
   interpolation of identifiers.
 - Bulk reads use a plain `Rows` loop into `RawBytes`→`string`; no sqlx convenience layer.
+
+### `internal/db/mutate` — MariaDB (write, high scrutiny)
+
+- The undo contract lives here: `Classify` (feasibility before execution), `RowEditor`
+  (before/after images), `LoadNextSQL` (keyset pagination). Writes never bypass this
+  package.
+- See its `DOC.md` for the invariants (never undo DDL, quote identifiers, before-image
+  in a transaction). This is the security-critical package — review hardest here.
 
 ### `internal/ai` — agent
 
@@ -162,6 +179,9 @@ render it in `View`. Test the pane logic without a live DB.
 - **Msg types live in `messages.go`.** Never define a `tea.Msg` inline in a pane.
 - **Test-first (TDD)** — the superpowers way. Unit-test pane logic without a live DB;
   live-DB tests `t.Skip` when unreachable.
+- **Update the module's `DOC.md` in the same change as the code.** A change that
+  touches a package invariant (listed in that package's `DOC.md`) without updating
+  the doc is incomplete.
 - **Conventional commits:** `<type>(<scope>): <body>`, scopes `tui|db|ai|state|config`.
   `fix` for defects found in review, `feat` for new capability.
 

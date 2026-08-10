@@ -1,6 +1,10 @@
-package db
+package mutate
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/claymor333/squal/internal/db"
+)
 
 // keysetCondition builds a composite-key strictly-greater predicate for keyset
 // pagination over ORDER BY pk. lastVals must align with the pk columns.
@@ -9,15 +13,15 @@ func keysetCondition(pk, lastVals []string) string {
 		return ""
 	}
 	if len(pk) == 1 {
-		return fmt.Sprintf("(%s > '%s')", QuoteIdentifier(pk[0]), escape(lastVals[0]))
+		return fmt.Sprintf("(%s > '%s')", db.QuoteIdentifier(pk[0]), escape(lastVals[0]))
 	}
 	parts := make([]string, 0, len(pk))
 	for i := range pk {
 		eq := make([]string, 0, i+1)
 		for j := 0; j < i; j++ {
-			eq = append(eq, fmt.Sprintf("%s = '%s'", QuoteIdentifier(pk[j]), escape(lastVals[j])))
+			eq = append(eq, fmt.Sprintf("%s = '%s'", db.QuoteIdentifier(pk[j]), escape(lastVals[j])))
 		}
-		eq = append(eq, fmt.Sprintf("%s > '%s'", QuoteIdentifier(pk[i]), escape(lastVals[i])))
+		eq = append(eq, fmt.Sprintf("%s > '%s'", db.QuoteIdentifier(pk[i]), escape(lastVals[i])))
 		parts = append(parts, "("+joinAnd(eq)+")")
 	}
 	return "(" + joinOr(parts) + ")"
@@ -63,7 +67,7 @@ func LoadNextSQL(dbName, table string, pk, lastVals []string, limit int) (string
 		return "", fmt.Errorf("keyset pagination requires a primary key on %s.%s", dbName, table)
 	}
 	return fmt.Sprintf("SELECT * FROM %s.%s WHERE %s ORDER BY %s LIMIT %d",
-		QuoteIdentifier(dbName), QuoteIdentifier(table), cond, quotedList(pk), limit), nil
+		db.QuoteIdentifier(dbName), db.QuoteIdentifier(table), cond, quotedList(pk), limit), nil
 }
 
 func quotedList(names []string) string {
@@ -72,7 +76,7 @@ func quotedList(names []string) string {
 		if i > 0 {
 			out += ", "
 		}
-		out += QuoteIdentifier(n)
+		out += db.QuoteIdentifier(n)
 	}
 	return out
 }

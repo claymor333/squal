@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/claymor333/squal/internal/db"
+	"github.com/claymor333/squal/internal/db/mutate"
 	"github.com/claymor333/squal/internal/state"
 )
 
@@ -28,7 +29,7 @@ type Tool struct {
 type Registry struct {
 	tools   map[string]Tool
 	conn    *db.Conn
-	ed      *db.RowEditor
+	ed      *mutate.RowEditor
 	store   *state.Store
 	confirm ConfirmFunc
 	// OnQuery ships a completed result set to the UI results grid. Set by the
@@ -36,7 +37,7 @@ type Registry struct {
 	OnQuery func(col *db.Columnar)
 }
 
-func NewRegistry(conn *db.Conn, ed *db.RowEditor, store *state.Store, confirm ConfirmFunc) *Registry {
+func NewRegistry(conn *db.Conn, ed *mutate.RowEditor, store *state.Store, confirm ConfirmFunc) *Registry {
 	r := &Registry{tools: map[string]Tool{}, conn: conn, ed: ed, store: store, confirm: confirm}
 	r.build()
 	return r
@@ -157,7 +158,7 @@ func (r *Registry) build() {
 		Params: map[string]any{"type": "object", "properties": map[string]any{"sql": map[string]any{"type": "string"}}, "required": []string{"sql"}},
 		Execute: func(ctx context.Context, args map[string]any) (string, error) {
 			sql := argStr(args, "sql")
-			v, err := db.Classify(sql)
+			v, err := mutate.Classify(sql)
 			if err != nil {
 				return "", err
 			}
@@ -371,14 +372,14 @@ func mapArgsToStr(v any) (map[string]string, error) {
 // ensureEditor lazily constructs the RowEditor for a table. The registry is
 // built at connection time when no table context exists yet, so row tools
 // create their editor on first use.
-func (r *Registry) ensureEditor(dbName, table string) (*db.RowEditor, error) {
+func (r *Registry) ensureEditor(dbName, table string) (*mutate.RowEditor, error) {
 	if r.ed != nil {
 		return r.ed, nil
 	}
 	if r.conn == nil {
 		return nil, fmt.Errorf("row tools require a live connection")
 	}
-	ed, err := db.NewRowEditor(r.conn, dbName, table)
+	ed, err := mutate.NewRowEditor(r.conn, dbName, table)
 	if err != nil {
 		return nil, err
 	}
