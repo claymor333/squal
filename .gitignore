@@ -23,7 +23,6 @@ config.json
 .squal/
 
 # Superpowers workflow config (local, not committed)
-.agents/skills/superpowers-*/
 .superpowers/
 
 # Git worktrees (created by superpowers worktree workflow)
