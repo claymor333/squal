@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/claymor333/squal/internal/db"
 )
 
@@ -14,11 +17,14 @@ type resultsView struct {
 	sortCol    int   // -1 = no sort
 	sortAsc    bool
 	selCol     int // column cursor (header highlight)
+	xOff       int // first visible column (horizontal window)
+	visCols    int // columns visible without horizontal scrolling
 	filter     string
 	filterMode bool
 	top        int // first visible row index into order
 	selRow     int // selected display row (relative to top)
 	viewport   int // data rows visible without scrolling
+	tbl        table.Model
 	loading    bool
 	err        error
 	done       bool
@@ -26,7 +32,13 @@ type resultsView struct {
 }
 
 func newResultsView(data *db.Columnar) *resultsView {
-	r := &resultsView{data: data, sortCol: -1, sortAsc: true, selCol: 0, viewport: 8}
+	tbl := table.New()
+	styles := table.DefaultStyles()
+	styles.Header = styles.Header.Bold(true).Foreground(lipgloss.Color("214"))
+	styles.Selected = styles.Selected.Background(lipgloss.Color("236")).Foreground(lipgloss.Color("39"))
+	styles.Cell = styles.Cell.Padding(0, 0)
+	tbl.SetStyles(styles)
+	r := &resultsView{data: data, sortCol: -1, sortAsc: true, selCol: 0, visCols: 1, viewport: 8, tbl: tbl}
 	for i := 0; i < data.Rows; i++ {
 		r.order = append(r.order, i)
 	}
@@ -41,7 +53,8 @@ func (r *resultsView) SetViewport(h int) {
 	}
 }
 
-// moveCol steps the column cursor, clamped to the header range.
+// moveCol steps the column cursor and slides the horizontal window so the
+// cursor stays visible — the vertical analog of scrollResults.
 func (r *resultsView) moveCol(d int) {
 	if r.data == nil || len(r.data.Columns) == 0 {
 		return
@@ -53,6 +66,28 @@ func (r *resultsView) moveCol(d int) {
 	if r.selCol > len(r.data.Columns)-1 {
 		r.selCol = len(r.data.Columns) - 1
 	}
+	if r.selCol < r.xOff {
+		r.xOff = r.selCol
+	}
+	if r.visCols > 0 && r.selCol >= r.xOff+r.visCols {
+		r.xOff = r.selCol - r.visCols + 1
+	}
+	if r.xOff < 0 {
+		r.xOff = 0
+	}
+}
+
+// colWindow returns the half-open column range currently visible.
+func (r *resultsView) colWindow() (start, end int) {
+	if r.visCols < 1 {
+		r.visCols = 1
+	}
+	start = r.xOff
+	end = start + r.visCols
+	if end > len(r.data.Columns) {
+		end = len(r.data.Columns)
+	}
+	return start, end
 }
 
 // sortCursor sorts by the cursor column, toggling direction if already sorted
@@ -102,9 +137,10 @@ func (r *resultsView) endFilter() {
 	r.filterMode = false
 }
 
-// view renders the grid: header row (cursor column highlighted, sort arrow on
-// the sorted column) then the visible window of data rows, each cell truncated
-// to a width that fits the given pane width.
+// view renders the grid through the bubbles table component: the column
+// cursor and sort arrow live in the header, the window of rows in the body.
+// Sort/filter/scroll state stays in resultsView; the table is a renderer over
+// the visible window, so no internal-scroll drift can hide rows.
 func (r *resultsView) view(w int) string {
 	if r.err != nil {
 		return styleErr.Render("✗ " + r.err.Error())
@@ -119,58 +155,71 @@ func (r *resultsView) view(w int) string {
 		return styleDim.Render("(no rows)")
 	}
 
+	// Horizontal window: a fixed column width so wide tables pan instead of
+	// squeezing every column to a couple of characters.
+	const colWidth = 16
 	ncols := len(r.data.Columns)
-	// reserve the selection marker (2 cells) and the " │ " separators.
-	cellW := (w - 2 - (ncols-1)*3) / ncols
-	if cellW < 1 {
-		cellW = 1
+	r.visCols = (w - 2) / colWidth
+	if r.visCols < 1 {
+		r.visCols = 1
 	}
-	if cellW > 64 {
-		cellW = 64
+	if r.visCols > ncols {
+		r.visCols = ncols
 	}
+	if r.xOff > ncols-r.visCols {
+		r.xOff = ncols - r.visCols
+	}
+	if r.xOff < 0 {
+		r.xOff = 0
+	}
+	cStart, cEnd := r.colWindow()
 
-	var b strings.Builder
-	for c, col := range r.data.Columns {
-		if c > 0 {
-			b.WriteString(" │ ")
-		}
-		head := col
-		if r.sortCol == c {
+	cols := make([]table.Column, cEnd-cStart)
+	for i, c := cStart, 0; i < cEnd; i, c = i+1, c+1 {
+		title := r.data.Columns[i]
+		if r.sortCol == i {
 			if r.sortAsc {
-				head += " ▲"
+				title += " ▲"
 			} else {
-				head += " ▼"
+				title += " ▼"
 			}
 		}
-		if c == r.selCol {
-			b.WriteString(styleAccent.Render("▸ " + head))
-		} else {
-			b.WriteString(styleDim.Render("  " + head))
+		if i == r.selCol {
+			title = styleAccent.Render("▸ " + title)
 		}
+		cols[c] = table.Column{Title: title, Width: colWidth}
 	}
-	if r.filterMode {
-		b.WriteString("   [filter: " + r.filter + "▌]")
-	}
-	b.WriteString("\n")
 
 	end := r.top + r.viewport
 	if end > len(r.order) {
 		end = len(r.order)
 	}
+	rows := make([]table.Row, 0, end-r.top)
 	for row := r.top; row < end; row++ {
-		mark := "  "
-		if row == r.top+r.selRow {
-			mark = "◉ "
+		line := make(table.Row, cEnd-cStart)
+		for i, c := cStart, 0; i < cEnd; i, c = i+1, c+1 {
+			line[c] = truncate(r.data.Value(i, r.order[row]), colWidth)
 		}
-		b.WriteString(mark)
-		for c := range r.data.Columns {
-			if c > 0 {
-				b.WriteString(" │ ")
-			}
-			b.WriteString(truncate(r.data.Value(c, r.order[row]), cellW))
-		}
-		b.WriteString("\n")
+		rows = append(rows, line)
 	}
+
+	r.tbl.SetColumns(cols)
+	r.tbl.SetRows(rows)
+	r.tbl.SetHeight(r.viewport)
+	r.tbl.SetWidth(w)
+	if r.selRow >= len(rows) {
+		r.selRow = len(rows) - 1
+	}
+	r.tbl.SetCursor(r.selRow)
+
+	var b strings.Builder
+	if r.filterMode || r.filter != "" {
+		fmt.Fprintf(&b, "[filter: %s▌]\n", r.filter)
+	}
+	if cEnd-cStart < ncols {
+		fmt.Fprintf(&b, "[cols %d-%d of %d]\n", cStart+1, cEnd, ncols)
+	}
+	b.WriteString(r.tbl.View())
 	return b.String()
 }
 
@@ -212,6 +261,65 @@ func truncate(s string, n int) string {
 		return "…"
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// ringCap bounds how many result sets a connection keeps in the ring.
+const ringCap = 8
+
+// resultsRing holds the recent result sets for one connection. Each grid keeps
+// its own sort/filter/scroll, so flipping through the ring preserves context.
+type resultsRing struct {
+	grids []*resultsView
+	idx   int
+}
+
+func newResultsRing() *resultsRing {
+	return &resultsRing{}
+}
+
+func (r *resultsRing) len() int { return len(r.grids) }
+
+func (r *resultsRing) cur() *resultsView {
+	if len(r.grids) == 0 {
+		return nil
+	}
+	return r.grids[r.idx]
+}
+
+// push stages a new result set as the active grid, evicting the oldest past the
+// cap.
+func (r *resultsRing) push(v *resultsView) {
+	r.grids = append(r.grids, v)
+	r.idx = len(r.grids) - 1
+	if len(r.grids) > ringCap {
+		r.grids = r.grids[len(r.grids)-ringCap:]
+		r.idx = len(r.grids) - 1
+	}
+}
+
+func (r *resultsRing) next() {
+	if len(r.grids) == 0 {
+		return
+	}
+	r.idx = (r.idx + 1) % len(r.grids)
+}
+
+func (r *resultsRing) prev() {
+	if len(r.grids) == 0 {
+		return
+	}
+	r.idx = (r.idx - 1 + len(r.grids)) % len(r.grids)
+}
+
+// drop removes the active grid and moves the cursor to its neighbour.
+func (r *resultsRing) drop() {
+	if len(r.grids) == 0 {
+		return
+	}
+	r.grids = append(r.grids[:r.idx], r.grids[r.idx+1:]...)
+	if r.idx >= len(r.grids) {
+		r.idx = len(r.grids) - 1
+	}
 }
 
 func (r *resultsView) rebuildOrder() {

@@ -7,16 +7,18 @@ import (
 
 // paneFocus identifies which pane receives key input. The order in this block
 // is NOT the tab cycle order — the cycle is an explicit slice built by the
-// model (focusCycle), because row/history panes only join while open.
+// model (focusCycle), because the rail only joins while open. focusRow /
+// focusHistory / focusAI double as the rail's tab identifiers.
 type paneFocus int
 
 const (
 	focusSchema paneFocus = iota
 	focusEditor
 	focusResults
-	focusRow     // right-side row editor, only while a row panel is open
-	focusHistory // action history, only while the history panel is open
-	focusAI
+	focusRail    // the tabbed context rail (row/hist/ai), only while open
+	focusRow     // rail tab: right-side row editor
+	focusHistory // rail tab: action history
+	focusAI      // rail tab: the AI panel
 )
 
 type queryStartedMsg struct {

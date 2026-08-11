@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -25,6 +26,20 @@ type statusInfo struct {
 	Focus   paneFocus
 }
 
+// toastLine renders a transient, single-line notice (a write verdict like
+// "saved — undoable", a delete, or an error) clipped to the window width. It is
+// the footer's second row when a toast is active.
+func toastLine(t string, w int) string {
+	if t == "" {
+		return ""
+	}
+	style := styleAccent
+	if strings.Contains(t, "✗") {
+		style = styleErr
+	}
+	return fit(style.Render(t), w, 1)
+}
+
 // statusView renders the one-line footer: conn | rows | elapsed on the left,
 // the focused pane's keys on the right. A scoped error replaces the left
 // cluster so it is always visible.
@@ -43,17 +58,19 @@ func statusView(s statusInfo) string {
 	var keys string
 	switch s.Focus {
 	case focusSchema:
-		keys = "↑↓ move · enter open/select · c connect · tab focus"
+		keys = "↑↓ move · enter open/select · alt+x cols · alt+f filter · alt+c connect · tab focus"
 	case focusEditor:
 		keys = "type · alt+enter run · ↑↓←→ move · ctrl+p/n history · tab focus"
 	case focusResults:
-		keys = "↑↓ move · ←→ col · s sort · f filter · n next · enter/o row · tab focus"
+		keys = "↑↓ move · ←→ scroll cols · alt+s sort · alt+f filter · alt+n next · pgup/pgdn ring · tab focus"
 	case focusRow:
-		keys = "↑↓ field · enter edit · r raw · s save · esc close"
+		keys = "↑↓ field · enter edit · alt+r raw · alt+s save · alt+1/2/3 tab"
 	case focusHistory:
-		keys = "↑↓ move · enter undo · esc close"
+		keys = "↑↓ move · enter undo · alt+1/2/3 tab · esc close"
 	case focusAI:
-		keys = "type · enter run · a mode · esc interrupt"
+		keys = "type · enter run · alt+a mode · esc interrupt · alt+1/2/3 tab"
+	case focusRail:
+		keys = "alt+1/2/3 tab · alt+0 close · esc close"
 	}
 	return styleStatus.Render(label + " | " + keys)
 }

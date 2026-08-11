@@ -99,29 +99,41 @@ func TestEditorUpDownMovesLines(t *testing.T) {
 	for _, r := range "abc\nde\nf" {
 		e.insert(r)
 	}
-	// cur=8 (end of "f", col 1). Up keeps the column on the "de" line.
+	e.ta.CursorEnd() // cursor on the "f" line (line 2)
+	if e.ta.Line() != 2 {
+		t.Fatalf("cursor line = %d, want 2", e.ta.Line())
+	}
 	e.moveUp()
-	if e.cur != 5 {
-		t.Fatalf("cur after moveUp = %d, want 5", e.cur)
+	if e.ta.Line() != 1 { // "de" line
+		t.Fatalf("after moveUp line = %d, want 1", e.ta.Line())
 	}
 	e.moveDown()
-	if e.cur != 8 {
-		t.Fatalf("cur after moveDown = %d, want 8", e.cur)
+	if e.ta.Line() != 2 {
+		t.Fatalf("after moveDown line = %d, want 2", e.ta.Line())
 	}
 }
 
-func TestEditorViewShowsCursor(t *testing.T) {
+func TestEditorViewShowsValue(t *testing.T) {
 	e := newEditor()
 	for _, r := range "ab" {
 		e.insert(r)
 	}
-	out := e.view()
-	if !strings.Contains(out, "ab█") {
-		t.Fatalf("view = %q, want cursor at end", out)
+	if got := e.ta.Value(); got != "ab" {
+		t.Fatalf("value = %q, want ab", got)
 	}
-	e.moveLeft()
-	out = e.view()
-	if !strings.Contains(out, "a█b") {
-		t.Fatalf("view = %q, want cursor before b", out)
+	if !strings.Contains(e.view(), "ab") {
+		t.Fatalf("view = %q, want value rendered", e.view())
+	}
+	// cursor movement is exercised behaviorally by TestEditorCursorMovement;
+	// the bubbles cursor renders as an inverted block, not a literal glyph.
+}
+
+func TestEditorTitleShowsDB(t *testing.T) {
+	e := newEditor()
+	if got := e.title("app"); !strings.Contains(got, "app") {
+		t.Fatalf("editor title missing db: %q", got)
+	}
+	if got := e.title(""); !strings.Contains(got, "editor") {
+		t.Fatalf("empty-db title should still say editor: %q", got)
 	}
 }

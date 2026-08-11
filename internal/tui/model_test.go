@@ -58,8 +58,8 @@ func TestEditorEnterInsertsNewline(t *testing.T) {
 	if len(cur.ed.history) != 0 {
 		t.Fatalf("Enter must not push history: %v", cur.ed.history)
 	}
-	if lineCount(cur.ed.view()) != 2 {
-		t.Fatalf("Enter should insert a newline (editor now %d lines)", lineCount(cur.ed.view()))
+	if !strings.Contains(cur.ed.ta.Value(), "\n") {
+		t.Fatalf("Enter should insert a newline: %q", cur.ed.ta.Value())
 	}
 }
 
@@ -114,9 +114,15 @@ func TestSchemaNavigationSetsCurrentDB(t *testing.T) {
 func newModelForTest(count int) *model {
 	m := &model{focus: focusSchema}
 	for i := 0; i < count; i++ {
-		m.conns = append(m.conns, &connData{profile: config.Profile{Name: "t"}})
+		m.conns = append(m.conns, newConnData(config.Profile{Name: "t"}))
 	}
 	return m
+}
+
+// altKey builds an Alt-modified rune key; shortcuts use modifiers, so tests
+// press the same combos a user would.
+func altKey(r rune) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true}
 }
 
 func TestResultsKeysSortCursorColumn(t *testing.T) {
@@ -124,7 +130,7 @@ func TestResultsKeysSortCursorColumn(t *testing.T) {
 	m.conns[m.active].results = newResultsView(colsData())
 	m.focus = focusResults
 	m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
 	if m.conns[m.active].results.sortCol != 1 {
 		t.Fatalf("sortCol = %d, want 1", m.conns[m.active].results.sortCol)
 	}
@@ -135,7 +141,7 @@ func TestResultsKeysFilterIncremental(t *testing.T) {
 	m.conns[m.active].results = newResultsView(colsData())
 	m.focus = focusResults
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}, Alt: true})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	r := m.conns[m.active].results
 	if r.filter != "b" {
@@ -197,12 +203,12 @@ func TestHistoryToggleLoadsActions(t *testing.T) {
 	m.focus = focusResults
 	cur := m.conns[0]
 
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
 	if cmd == nil || cur.hist == nil {
-		t.Fatal("u should open the history panel and dispatch a load")
+		t.Fatal("u should open the history tab and dispatch a load")
 	}
-	if m.focus != focusHistory {
-		t.Fatalf("focus = %v, want history", m.focus)
+	if m.focus != focusRail || cur.railTab != focusHistory {
+		t.Fatalf("focus = %v railTab = %v, want rail/history", m.focus, cur.railTab)
 	}
 	msg := cmd()
 	hl, ok := msg.(historyLoadedMsg)
@@ -213,10 +219,10 @@ func TestHistoryToggleLoadsActions(t *testing.T) {
 	if len(cur.hist.rows) != 1 || cur.hist.rows[0].ID != "a1" {
 		t.Fatalf("history rows = %+v", cur.hist.rows)
 	}
-	// esc closes
+	// esc closes the rail
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
-	if cur.hist != nil {
-		t.Fatal("esc should close history")
+	if cur.railOpen {
+		t.Fatal("esc should close the rail")
 	}
 }
 
@@ -235,17 +241,23 @@ func TestQuestionMarkTypesInEditor(t *testing.T) {
 	}
 }
 
-// TestQuestionMarkOpensHelp covers the ? binding and the help overlay render.
-func TestQuestionMarkOpensHelp(t *testing.T) {
+// TestF1OpensHelp covers the F1 help binding; the help is a popup over the live
+// frame, not a full-screen replacement.
+func TestF1OpensHelp(t *testing.T) {
 	m := newModelForTest(1)
-	m.width, m.height = 80, 30
+	m.width, m.height = 100, 26
+	m.conns[0].pane = newSchemaPane([]db.Database{{Name: "app"}})
 	m.focus = focusSchema
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
 	if !m.help {
-		t.Fatal("? should open the help overlay")
+		t.Fatal("F1 should open the help overlay")
 	}
-	if !strings.Contains(m.View(), "keys") {
-		t.Fatal("help overlay should render")
+	out := m.View()
+	if !strings.Contains(out, "keys") {
+		t.Fatal("help popup should render")
+	}
+	if !strings.Contains(out, "▸ schema") {
+		t.Fatal("the base frame should stay visible behind the popup")
 	}
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
 	if m.help {
@@ -257,7 +269,7 @@ func TestQuestionMarkOpensHelp(t *testing.T) {
 func TestCloseRequiresConfirm(t *testing.T) {
 	m := newModelForTest(1)
 	m.focus = focusSchema
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}, Alt: true})
 	if m.confirm == nil {
 		t.Fatal("q should open a confirm modal, not close immediately")
 	}
@@ -285,6 +297,37 @@ func TestCtrlDClosesDirectly(t *testing.T) {
 	}
 }
 
+// TestCtrlCQuits: ^c must exit the app, not drop a tab (q/ctrl+d own closing).
+func TestCtrlCQuits(t *testing.T) {
+	m := newModelForTest(2)
+	m.focus = focusSchema
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c should dispatch a quit cmd")
+	}
+	if len(m.conns) != 2 {
+		t.Fatalf("ctrl+c must not close a tab: conns = %d", len(m.conns))
+	}
+}
+
+func TestCtrlCQuitsFromHelp(t *testing.T) {
+	m := newModelForTest(1)
+	m.help = true
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c should quit even while help is open")
+	}
+}
+
+func TestCtrlCQuitsFromConnectDialog(t *testing.T) {
+	m := newModelForTest(1)
+	m.connect = newConnectView()
+	_, cmd := m.handleConnectKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c should quit even from the connect dialog")
+	}
+}
+
 func TestTransientErrorClearedOnKey(t *testing.T) {
 	m := newModelForTest(1)
 	m.transientErr = errSave
@@ -292,6 +335,172 @@ func TestTransientErrorClearedOnKey(t *testing.T) {
 	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 	if m.transientErr != nil {
 		t.Fatal("any key should clear the transient status error")
+	}
+}
+
+func TestRailTabSwitch(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	cur.hist = newHistoryView(nil)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
+	if !cur.railOpen || cur.railTab != focusHistory {
+		t.Fatalf("rail = %v/%v, want open on hist", cur.railOpen, cur.railTab)
+	}
+	if m.focus != focusRail {
+		t.Fatalf("focus = %v, want rail", m.focus)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}, Alt: true})
+	if cur.railTab != focusAI {
+		t.Fatalf("railTab = %v, want ai", cur.railTab)
+	}
+}
+
+func TestRingFlipKeys(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	cur.ring = newResultsRing()
+	cur.ring.push(newResultsView(colsData()))
+	cur.ring.push(newResultsView(&db.Columnar{Columns: []string{"x"}, Cols: [][]string{{"1"}}, Rows: 1}))
+	cur.results = cur.ring.cur()
+	m.focus = focusResults
+	m.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	if cur.results.data.Columns[0] == "x" {
+		t.Fatalf("pgdn should leave the newest grid: %v", cur.results.data.Columns)
+	}
+}
+
+func TestRailCollapseToggles(t *testing.T) {
+	m := newModelForTest(1)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}, Alt: true})
+	if !m.railCollapsed {
+		t.Fatal("L should collapse the left rail")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}, Alt: true})
+	if m.railCollapsed {
+		t.Fatal("L again should restore the left rail")
+	}
+}
+
+func TestToastSetAndCleared(t *testing.T) {
+	m := newModelForTest(1)
+	m.width, m.height = 80, 20
+	m.toast = "saved — undoable"
+	if !strings.Contains(m.View(), "saved — undoable") {
+		t.Fatal("toast should render in the footer")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.toast != "" {
+		t.Fatal("any key should clear the toast")
+	}
+}
+
+// TestHelpDismissesOnActionKey: the help overlay is a menu — any key closes it
+// and is then processed, so "F1 then 1" opens the rail instead of doing nothing.
+func TestHelpDismissesOnActionKey(t *testing.T) {
+	m := newModelForTest(1)
+	m.help = true
+	m.focus = focusSchema
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
+	if m.help {
+		t.Fatal("any key should dismiss help")
+	}
+	if !m.conns[0].railOpen || m.conns[0].railTab != focusHistory {
+		t.Fatal("the key should then be processed (open hist tab)")
+	}
+}
+
+// TestDigitsTypeInEditor: bare digits are SQL text in the editor — they type
+// and must not switch the rail's active tab (which is open by default).
+func TestDigitsTypeInEditor(t *testing.T) {
+	m := newModelForTest(1)
+	m.conns[m.active].ed = newEditor()
+	m.focus = focusEditor
+	cur := m.conns[m.active]
+	cur.railTab = focusAI
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	if got := m.conns[m.active].ed.text(); got != "1" {
+		t.Fatalf("editor text = %q, want 1", got)
+	}
+	if cur.railTab != focusAI {
+		t.Fatalf("bare 1 must not switch the rail tab: %v", cur.railTab)
+	}
+}
+
+// TestRailRendersWhenOpen: opening the rail must put a visible rail box in the
+// frame that stays inside the window.
+func TestRailRendersWhenOpen(t *testing.T) {
+	m := newModelForTest(1)
+	m.width, m.height = 100, 26
+	cur := m.conns[0]
+	cur.results = newResultsView(colsData())
+	m.focus = focusResults
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}, Alt: true})
+	out := m.View()
+	if !strings.Contains(out, "rail") || !strings.Contains(out, "[row]") {
+		t.Fatalf("rail not rendered: %q", out)
+	}
+	if lineCount(out) > m.height {
+		t.Fatalf("rail overflowed: %d > %d", lineCount(out), m.height)
+	}
+}
+
+func TestLowercaseLCollapses(t *testing.T) {
+	m := newModelForTest(1)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}, Alt: true})
+	if !m.railCollapsed {
+		t.Fatal("lowercase l should also collapse the left rail")
+	}
+}
+
+// TestAIRequestTypesBareLetters: bare keys (even y/n) type into the AI request;
+// y/n only answer a pending write confirm.
+func TestAIRequestTypesBareLetters(t *testing.T) {
+	m := newModelForTest(1)
+	m.ai = newAIPanel()
+	m.focus = focusRail
+	m.conns[0].railOpen = true
+	m.conns[0].railTab = focusAI
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if got := m.ai.request.Value(); got != "yn" {
+		t.Fatalf("request = %q, want yn (bare letters type)", got)
+	}
+}
+
+// TestRailOpenByDefault: the context rail is always on screen until the user
+// closes it manually (esc while focused); alt+2 reopens it on history.
+func TestRailOpenByDefault(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	if !cur.railOpen {
+		t.Fatal("the context rail should be open by default")
+	}
+	m.focus = focusRail
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
+	if cur.railOpen {
+		t.Fatal("esc should close the rail")
+	}
+	m.handleKey(altKey('2'))
+	if !cur.railOpen || cur.railTab != focusHistory {
+		t.Fatal("alt+2 should reopen the rail on hist")
+	}
+}
+
+// TestAltZeroTogglesRail: alt+0 opens/closes the rail from anywhere, and keeps
+// the last active tab when reopening.
+func TestAltZeroTogglesRail(t *testing.T) {
+	m := newModelForTest(1)
+	cur := m.conns[0]
+	m.focus = focusResults
+	cur.railTab = focusHistory
+
+	m.handleKey(altKey('0'))
+	if cur.railOpen {
+		t.Fatal("alt+0 should close an open rail")
+	}
+	m.handleKey(altKey('0'))
+	if !cur.railOpen || cur.railTab != focusHistory {
+		t.Fatalf("alt+0 should reopen the rail on the last tab: %v/%v", cur.railOpen, cur.railTab)
 	}
 }
 
@@ -321,7 +530,7 @@ func TestViewNeverOverflows(t *testing.T) {
 	if lineCount(out) > m.height {
 		t.Fatalf("View overflowed: %d lines > %d", lineCount(out), m.height)
 	}
-	for _, want := range []string{"schema", "editor", "results", "ai"} {
+	for _, want := range []string{"schema", "editor", "results"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("View missing pane title %q", want)
 		}

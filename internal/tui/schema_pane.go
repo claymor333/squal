@@ -15,19 +15,47 @@ type browseRequestMsg struct {
 	PK       []string
 }
 
-// schemaPane is the DB/table tree. The cursor is an absolute line index into the
-// rendered tree (one line per db header, one per expanded table), so selection
-// and viewport scrolling share a single coordinate space.
+// treeKind identifies which level of the tree a cursor line points at.
+type treeKind int
+
+const (
+	treeDB treeKind = iota
+	treeTable
+	treeCol
+)
+
+// treeEntry resolves a tree line to its db/table/column indices.
+type treeEntry struct {
+	kind  treeKind
+	db    int
+	table int
+	col   int
+}
+
+// schemaPane is the DB/table/column tree. The cursor is an absolute line index
+// into the *visible* tree — filtering, collapse, and column expansion all
+// change what lines exist, so navigation and selection share one coordinate
+// space that rebuilds from the current pane state.
 type schemaPane struct {
-	dbs      []db.Database
-	expanded map[int]bool
-	cursor   int
-	lines    int // viewport height; 0 = unbounded (tests)
-	top      int // first visible line
+	dbs        []db.Database
+	expanded   map[int]bool    // db index -> tables visible
+	expCols    map[[2]int]bool // (db, table) -> columns visible
+	cursor     int
+	lines      int  // viewport height; 0 = unbounded (tests)
+	top        int  // first visible line
+	collapsed  bool // only db headers shown (left-rail collapse, U13)
+	filterMode bool
+	filter     string
 }
 
 func newSchemaPane(dbs []db.Database) *schemaPane {
-	return &schemaPane{dbs: dbs, expanded: map[int]bool{}}
+	return &schemaPane{dbs: dbs, expanded: map[int]bool{}, expCols: map[[2]int]bool{}}
+}
+
+// SetCollapsed shows only db headers, for the rail-collapse toggle (U13).
+func (p *schemaPane) SetCollapsed(b bool) {
+	p.collapsed = b
+	p.clampCursor()
 }
 
 // toggleDB expands or collapses a database's table list.
@@ -39,21 +67,135 @@ func (p *schemaPane) toggleDB(i int) {
 	p.clampCursor()
 }
 
+// toggleTable expands or collapses the columns of the table under the cursor.
+func (p *schemaPane) toggleTable() {
+	e, ok := p.entryAt(p.cursor)
+	if !ok || e.kind == treeDB {
+		return
+	}
+	key := [2]int{e.db, e.table}
+	p.expCols[key] = !p.expCols[key]
+	p.clampCursor()
+}
+
 // SetLines bounds the viewport; view() renders only lines [top, top+lines).
 func (p *schemaPane) SetLines(n int) {
 	p.lines = n
 	p.clampTop()
 }
 
-// treeLen returns the total rendered line count.
+// --- filter ----------------------------------------------------------------
+
+func (p *schemaPane) startFilter() {
+	p.filterMode = true
+	p.filter = ""
+	p.clampCursor()
+}
+
+func (p *schemaPane) appendFilter(r rune) {
+	if !p.filterMode {
+		return
+	}
+	p.filter += string(r)
+	p.clampCursor()
+}
+
+func (p *schemaPane) popFilter() {
+	if !p.filterMode {
+		return
+	}
+	if n := len(p.filter); n > 0 {
+		p.filter = p.filter[:n-1]
+	}
+	p.clampCursor()
+}
+
+func (p *schemaPane) endFilter() {
+	p.filterMode = false
+}
+
+// visibleDB reports whether a db has any line under the active filter.
+func (p *schemaPane) visibleDB(i int) bool {
+	if p.filter == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(p.dbs[i].Name), p.filter) {
+		return true
+	}
+	for _, t := range p.dbs[i].Tables {
+		if strings.Contains(strings.ToLower(t.Name), p.filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *schemaPane) visibleTable(name string) bool {
+	if p.filter == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(name), p.filter)
+}
+
+// --- tree navigation (absolute cursor over the visible tree) ----------------
+
+// treeLen returns the number of visible lines.
 func (p *schemaPane) treeLen() int {
-	n := len(p.dbs)
+	n := 0
 	for i, d := range p.dbs {
-		if p.expanded[i] {
-			n += len(d.Tables)
+		if !p.collapsed && !p.visibleDB(i) {
+			continue
+		}
+		n++ // db header
+		if p.collapsed || !p.expanded[i] {
+			continue
+		}
+		for j, t := range d.Tables {
+			if !p.visibleTable(t.Name) {
+				continue
+			}
+			n++ // table
+			if p.expCols[[2]int{i, j}] {
+				n += len(t.Columns)
+			}
 		}
 	}
 	return n
+}
+
+// entryAt resolves a visible-tree line to its db/table/column indices.
+func (p *schemaPane) entryAt(line int) (treeEntry, bool) {
+	idx := 0
+	for i, d := range p.dbs {
+		if !p.collapsed && !p.visibleDB(i) {
+			continue
+		}
+		if idx == line {
+			return treeEntry{kind: treeDB, db: i}, true
+		}
+		idx++
+		if p.collapsed || !p.expanded[i] {
+			continue
+		}
+		for j, t := range d.Tables {
+			if !p.visibleTable(t.Name) {
+				continue
+			}
+			if idx == line {
+				return treeEntry{kind: treeTable, db: i, table: j}, true
+			}
+			idx++
+			if p.expCols[[2]int{i, j}] {
+				for k := range t.Columns {
+					if idx == line {
+						return treeEntry{kind: treeCol, db: i, table: j, col: k}, true
+					}
+					idx++
+				}
+			}
+		}
+	}
+	return treeEntry{}, false
 }
 
 func (p *schemaPane) clampCursor() {
@@ -104,47 +246,33 @@ func (p *schemaPane) moveUp() bool {
 	return true
 }
 
-// current identifies the tree entry under the cursor.
-func (p *schemaPane) current() (dbIdx, tableIdx int, onTable bool) {
-	line := 0
-	for i, d := range p.dbs {
-		if line == p.cursor {
-			return i, 0, false
-		}
-		line++
-		if !p.expanded[i] {
-			continue
-		}
-		for j := range d.Tables {
-			if line == p.cursor {
-				return i, j, true
-			}
-			line++
-		}
-	}
-	return 0, 0, false
-}
-
-// selectCurrent returns a browseRequestMsg when the cursor is on a table, or
-// toggles the database when it is on a header. Returns nil for an empty tree.
+// selectCurrent returns a browseRequestMsg when the cursor is on a table or
+// column, or toggles the database when it is on a header. Returns nil on a db
+// header when collapsed.
 func (p *schemaPane) selectCurrent() any {
 	if p.treeLen() == 0 {
 		return nil
 	}
-	i, j, onTable := p.current()
-	if !onTable {
-		p.toggleDB(i)
+	e, ok := p.entryAt(p.cursor)
+	if !ok {
 		return nil
 	}
-	d := p.dbs[i]
-	t := d.Tables[j]
-	var pk []string
-	for _, c := range t.Columns {
-		if c.Key == "PRI" {
-			pk = append(pk, c.Name)
+	switch e.kind {
+	case treeDB:
+		p.toggleDB(e.db)
+		return nil
+	case treeTable, treeCol:
+		d := p.dbs[e.db]
+		t := d.Tables[e.table]
+		var pk []string
+		for _, c := range t.Columns {
+			if c.Key == "PRI" {
+				pk = append(pk, c.Name)
+			}
 		}
+		return browseRequestMsg{Database: d.Name, Table: t.Name, PK: pk}
 	}
-	return browseRequestMsg{Database: d.Name, Table: t.Name, PK: pk}
+	return nil
 }
 
 // currentDatabase returns the database the cursor is on.
@@ -152,8 +280,8 @@ func (p *schemaPane) currentDatabase() string {
 	if p.treeLen() == 0 {
 		return ""
 	}
-	i, _, _ := p.current()
-	return p.dbs[i].Name
+	e, _ := p.entryAt(p.cursor)
+	return p.dbs[e.db].Name
 }
 
 func browseQuery(dbName, table string, pk []string) string {
@@ -172,41 +300,41 @@ func quotedList(names []string) string {
 	return strings.Join(q, ", ")
 }
 
-// view renders the tree window [top, top+lines), marking the cursor line.
+// view renders the visible tree window [top, top+lines), marking the cursor
+// line, with a filter box line when filtering.
 func (p *schemaPane) view() string {
 	var b strings.Builder
-	line := 0
+	if p.filterMode || p.filter != "" {
+		fmt.Fprintf(&b, "[filter: %s▌]\n", p.filter)
+	}
 	end := p.treeLen()
 	if p.lines > 0 && p.top+p.lines < end {
 		end = p.top + p.lines
 	}
-	for i, d := range p.dbs {
-		if line >= end {
+	for line := p.top; line < end; line++ {
+		e, ok := p.entryAt(line)
+		if !ok {
 			break
 		}
-		if line >= p.top {
-			mark := "▸ "
+		switch e.kind {
+		case treeDB:
+			head := "▸ "
 			if line == p.cursor {
-				mark = "◉ "
+				head = "◉ "
 			}
-			fmt.Fprintf(&b, "%s%s (%d)\n", mark, d.Name, len(d.Tables))
-		}
-		line++
-		if !p.expanded[i] {
-			continue
-		}
-		for _, t := range d.Tables {
-			if line >= end {
-				break
+			fmt.Fprintf(&b, "%s%s (%d)\n", head, p.dbs[e.db].Name, len(p.dbs[e.db].Tables))
+		case treeTable:
+			head := "  "
+			if line == p.cursor {
+				head = "◉ "
 			}
-			if line >= p.top {
-				mark := "  "
-				if line == p.cursor {
-					mark = "◉ "
-				}
-				fmt.Fprintf(&b, "%s%s\n", mark, t.Name)
+			fmt.Fprintf(&b, "%s%s\n", head, p.dbs[e.db].Tables[e.table].Name)
+		case treeCol:
+			head := "    "
+			if line == p.cursor {
+				head = "  ◉ "
 			}
-			line++
+			fmt.Fprintf(&b, "%s%s\n", head, p.dbs[e.db].Tables[e.table].Columns[e.col].Name)
 		}
 	}
 	return b.String()

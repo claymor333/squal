@@ -31,3 +31,16 @@ func TestStatusShowsKeysPerFocus(t *testing.T) {
 		t.Fatalf("results keys missing: %q", s)
 	}
 }
+
+func TestToastLine(t *testing.T) {
+	got := toastLine("saved — undoable", 40)
+	if !strings.Contains(got, "saved — undoable") {
+		t.Fatalf("toast missing text: %q", got)
+	}
+	if lineCount(got) > 1 {
+		t.Fatalf("toast must be one line: %q", got)
+	}
+	if n := len([]rune(got)); n > 40 {
+		t.Fatalf("toast exceeds width: %d > 40", n)
+	}
+}

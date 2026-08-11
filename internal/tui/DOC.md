@@ -8,20 +8,20 @@ routes keys and messages. Panes talk to the DB only through the services
 
 | File | Role |
 |------|------|
-| `model.go` | root model: tabs, focus, keymap, batch pump, connection + AI wiring, layout-driven render |
-| `messages.go` | ALL shared `tea.Msg` types + `paneFocus` |
-| `layout.go` | pure pane-rect computation from (w,h,focus,rowOpen), `clip`/`fit`/`paneBox` |
-| `mouse.go` | `handleMouse` (rect hit-testing: click focus, click-select, wheel scroll) |
-| `schema_pane.go` | DB/table tree (absolute-cursor + internal scroll) → `browseRequestMsg` |
-| `editor.go` | multiline SQL editor + history → `runQueryMsg` |
-| `results.go` | virtualized grid on `Columnar`, viewport settable |
-| `rowpanel.go` | JSON-shaped row editor (see Known gaps) |
-| `history.go` | action history → `undoActionMsg` (see Known gaps) |
+| `model.go` | root model: tabs, focus, keymap, batch pump, connection + AI wiring, layout-driven render, rail state |
+| `messages.go` | ALL shared `tea.Msg` types + `paneFocus` (rail tabs: row/hist/ai) |
+| `layout.go` | pure pane-rect computation (five-zone: L/T/B/R/F), `clip`/`fit`/`paneBox` |
+| `mouse.go` | `handleMouse` (rect hit-testing: click focus, click-select, wheel scroll, rail tab click) |
+| `schema_pane.go` | DB/table/column tree (filter + collapse + internal scroll) → `browseRequestMsg`; hand-rolled (bubbles has no tree) |
+| `editor.go` | wraps **bubbles textarea** + query history → `runQueryMsg`; default-DB title |
+| `results.go` | grid rendered through **bubbles table** over a `Columnar` window; sort/filter/scroll state local; result-set ring |
+| `rowpanel.go` | row-editing rail tab (inline edit, raw JSON, save) |
+| `history.go` | action history rail tab → `undoActionMsg` |
 | `writer.go` | undo contract executor (the write service); `editorFor` + structured save/delete |
-| `aipanel.go` | Ask/NL→SQL panel, confirm dialog, Esc interrupt |
-| `help.go` | `?` key-reference overlay |
+| `aipanel.go` | Ask/NL→SQL rail tab (request via **bubbles textinput**), confirm dialog, Esc interrupt |
+| `help.go` | F1 overlay rendered by **bubbles help** from `key.Binding`s |
 | `connect.go` | connection dialog |
-| `statusbar.go` | one-line footer (scoped error slot) |
+| `statusbar.go` | one-line footer (scoped error slot) + toast line |
 
 ## Invariants (do not break)
 
@@ -30,9 +30,16 @@ routes keys and messages. Panes talk to the DB only through the services
   derives pane rects from the window size; `View` renders inside those rects and
   `handleMouse` hit-tests them. A new pane means one change in `layout.go` plus
   its tests — never hand-maintained Y-arithmetic.
-- **View never overflows the window.** Every pane body is clipped (`paneBox`) to
-  its rect; the schema tree scrolls internally; the results viewport is
-  computed, not a constant. Anything that renders must stay inside `(w, h)`.
+- **View never overflows the window.** Every pane body is clipped (`paneBox`, which
+  pads to its rect height and `MaxWidth`-truncates — lipgloss `Width` wraps) to its
+  rect; the schema tree scrolls internally; the results viewport is computed, not a
+  constant. Anything that renders must stay inside `(w, h)`.
+- **Bubbles components are renderers, not owners.** A component's `Update` returns a
+  new model — always store the result back. Key routing stays in `model.handleKey`;
+  the table is fed the visible window each frame so its internal scroll can't drift
+  from `resultsView.top`.
+- **The context rail is one zone.** row/hist/ai are rail *tabs* (lazily created);
+  exactly one is visible at a time. Never stack them back into separate panes.
 - **Panes are pure-ish**: mutate `connData`, emit `tea.Msg`s, return `tea.Cmd`s.
   They don't hold a `*sql.DB`.
 - **The batch pump orders reads.** The fetch goroutine appends into `Columnar`;
@@ -61,6 +68,6 @@ Did this change touch an invariant above? If yes, update it here.
 
 ## Known gaps (see AGENTS.md — tracked as issues)
 
-Row panel and hand-driven writes are wired (issues #1/#2 closed). Remaining
-polish items #3–#8 stand; plus `?` help is full-screen rather than a centered
-overlay.
+Row panel, history, and writes are wired (#1/#2 closed); the five-zone rail
+ships row/hist/ai tabs. Remaining polish items #3–#8 stand; `?` help is
+full-screen rather than a centered overlay.

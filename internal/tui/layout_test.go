@@ -4,7 +4,7 @@ import "testing"
 
 func TestLayoutFits(t *testing.T) {
 	l := newLayout()
-	rs := l.rects(120, 40, focusResults, false, false)
+	rs := l.rects(120, 40, focusResults, false, false, 1)
 	if rs.schema.Y < 1 {
 		t.Fatalf("schema starts above the tab bar: Y=%d", rs.schema.Y)
 	}
@@ -19,50 +19,88 @@ func TestLayoutFits(t *testing.T) {
 	}
 }
 
-func TestLayoutFocusExpands(t *testing.T) {
+func TestLayoutWidthsConsistentAcrossFocus(t *testing.T) {
 	l := newLayout()
-	idle := l.rects(120, 40, focusResults, false, false).schema
-	focused := l.rects(120, 40, focusSchema, false, false).schema
-	if focused.H <= idle.H {
-		t.Fatalf("focused schema should be taller: idle=%d focus=%d", idle.H, focused.H)
+	// focus must never change pane widths — only heights (editor) move.
+	base := l.rects(120, 40, focusResults, false, false, 1)
+	schema := l.rects(120, 40, focusSchema, false, false, 1)
+	if base.schema.W != schema.schema.W {
+		t.Fatalf("schema width changed with focus: %d vs %d", base.schema.W, schema.schema.W)
+	}
+	if base.editor.W != schema.editor.W || base.results.W != schema.results.W {
+		t.Fatalf("stage width changed with focus: editor %d vs %d", base.editor.W, schema.editor.W)
 	}
 }
 
-func TestLayoutRowPanelTakesRightThird(t *testing.T) {
+func TestLayoutRailFixedWidth(t *testing.T) {
 	l := newLayout()
-	rs := l.rects(120, 40, focusResults, true, false)
-	if rs.row.W != 40 {
-		t.Fatalf("row panel width = %d, want 40", rs.row.W)
+	rs := l.rects(120, 40, focusResults, true, false, 1)
+	// rightW = 120 - schemaW(28) = 92; the rail holds a fixed 42.
+	if rs.rail.W != railColWidth {
+		t.Fatalf("rail width = %d, want %d", rs.rail.W, railColWidth)
 	}
-	if rs.row.X+rs.row.W > 120 {
-		t.Fatalf("row panel escapes the window: %+v", rs.row)
+	if rs.rail.X+rs.rail.W > 120 {
+		t.Fatalf("rail escapes the window: %+v", rs.rail)
 	}
-	// editor/results shrink to make room on the left
-	if rs.editor.W != 80 || rs.results.W != 80 {
-		t.Fatalf("left panes not shrunk: editor.W=%d results.W=%d", rs.editor.W, rs.results.W)
+	if rs.rail.H != rs.schema.H {
+		t.Fatalf("rail should span the body height: %d vs %d", rs.rail.H, rs.schema.H)
+	}
+	// editor/results shrink to make room for the rail
+	if rs.editor.W != 92-railColWidth || rs.results.W != 92-railColWidth {
+		t.Fatalf("stage panes not shrunk: editor.W=%d results.W=%d", rs.editor.W, rs.results.W)
+	}
+}
+
+func TestLayoutRailShrinksOnNarrowWindow(t *testing.T) {
+	l := newLayout()
+	rs := l.rects(80, 40, focusResults, true, false, 1)
+	if rs.rail.W >= railColWidth {
+		t.Fatalf("narrow window should shrink the rail: %d", rs.rail.W)
+	}
+	if rs.editor.W < 15 {
+		t.Fatalf("stage collapsed: editor.W=%d", rs.editor.W)
+	}
+}
+
+func TestLayoutRailMinimized(t *testing.T) {
+	l := newLayout()
+	rs := l.rects(120, 40, focusResults, false, false, 1)
+	// closed rail is a thin strip, not zero width
+	if rs.rail.W != railMinWidth {
+		t.Fatalf("minimized rail width = %d, want %d", rs.rail.W, railMinWidth)
+	}
+	if rs.editor.W != 92-railMinWidth {
+		t.Fatalf("stage should shrink by the minimized rail: %d", rs.editor.W)
+	}
+}
+
+func TestLayoutCollapseGivesSchemaWidthToStage(t *testing.T) {
+	l := newLayout()
+	rs := l.rects(120, 40, focusResults, true, true, 1)
+	if rs.schema.W != 0 {
+		t.Fatalf("collapsed schema width = %d, want 0", rs.schema.W)
+	}
+	if rs.results.X+rs.results.W > 120 {
+		t.Fatalf("stage should use the freed width: %+v", rs.results)
 	}
 }
 
 func TestLayoutTinyWindowNeverBreaks(t *testing.T) {
 	l := newLayout()
-	rs := l.rects(60, 12, focusEditor, false, false)
+	rs := l.rects(60, 12, focusEditor, false, false, 1)
 	if rs.editor.H < 1 || rs.results.H < 1 || rs.schema.H < 1 {
 		t.Fatalf("tiny window collapsed a pane: %+v", rs)
 	}
 }
 
-func TestLayoutHistorySplitsResults(t *testing.T) {
+func TestLayoutToastFooter(t *testing.T) {
 	l := newLayout()
-	rs := l.rects(120, 40, focusResults, false, true)
-	if rs.hist.H < 3 {
-		t.Fatalf("history band too small: %d", rs.hist.H)
+	rs := l.rects(120, 40, focusResults, false, false, 2)
+	if rs.toast.Y != 38 || rs.status.Y != 39 {
+		t.Fatalf("footer rows misplaced: toast=%+v status=%+v", rs.toast, rs.status)
 	}
-	if rs.hist.Y != rs.results.Y+rs.results.H {
-		t.Fatalf("history should sit directly under results: hist.Y=%d res.Y+H=%d",
-			rs.hist.Y, rs.results.Y+rs.results.H)
-	}
-	if rs.hist.Y+rs.hist.H > rs.ai.Y {
-		t.Fatalf("history overlaps ai: %+v", rs.hist)
+	if rs.results.Y+rs.results.H > 38 {
+		t.Fatalf("body overflows with 2 footer rows: %+v", rs.results)
 	}
 }
 

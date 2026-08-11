@@ -61,8 +61,9 @@ func TestSchemaPaneScrollsWindowWithCursor(t *testing.T) {
 	if p.top != 4 { // cursor 6, 3-line window -> top 4
 		t.Fatalf("top = %d, want 4 (cursor 6)", p.top)
 	}
-	if _, j, onTable := p.current(); !onTable || j != 5 {
-		t.Fatalf("current = (onTable=%v j=%d), want t5", onTable, j)
+	e, ok := p.entryAt(p.cursor)
+	if !ok || e.kind != treeTable || e.table != 5 {
+		t.Fatalf("entryAt = %+v, want table t5", e)
 	}
 	// walk back to the header; top must return to 0
 	for i := 0; i < 6; i++ {
@@ -87,5 +88,59 @@ func TestSchemaPaneViewClipsToLines(t *testing.T) {
 	}
 	if !strings.Contains(out, "t0") {
 		t.Fatalf("window should start at t0: %q", out)
+	}
+}
+
+func TestSchemaPaneExpandsColumns(t *testing.T) {
+	p := newSchemaPane([]db.Database{{Name: "app", Tables: []db.Table{
+		{Name: "users", Columns: []db.Column{{Name: "id", Key: "PRI"}, {Name: "name"}}},
+	}}})
+	p.toggleDB(0)   // expand db
+	p.moveDown()    // cursor on users
+	p.toggleTable() // expand columns
+	out := p.view()
+	if !strings.Contains(out, "id") || !strings.Contains(out, "name") {
+		t.Fatalf("columns not shown: %q", out)
+	}
+	// selectCurrent on a column still browses the containing table
+	req, ok := p.selectCurrent().(browseRequestMsg)
+	if !ok || req.Table != "users" {
+		t.Fatalf("column selectCurrent = %#v, want browse of users", req)
+	}
+}
+
+func TestSchemaPaneFilter(t *testing.T) {
+	p := newSchemaPane([]db.Database{{Name: "app", Tables: []db.Table{{Name: "users"}, {Name: "orders"}}}})
+	p.toggleDB(0)
+	p.startFilter()
+	p.appendFilter('u')
+	out := p.view()
+	if !strings.Contains(out, "users") || strings.Contains(out, "orders") {
+		t.Fatalf("filter not applied: %q", out)
+	}
+	if p.treeLen() != 2 { // db header + users
+		t.Fatalf("filtered treeLen = %d, want 2", p.treeLen())
+	}
+	p.popFilter()
+	if !strings.Contains(p.view(), "orders") {
+		t.Fatalf("popFilter should restore rows: %q", p.view())
+	}
+	p.endFilter()
+	if p.filterMode {
+		t.Fatal("endFilter should leave filter mode")
+	}
+}
+
+func TestSchemaPaneCollapse(t *testing.T) {
+	p := newSchemaPane([]db.Database{{Name: "app", Tables: []db.Table{{Name: "users"}}}})
+	p.toggleDB(0)
+	p.moveDown()
+	p.SetCollapsed(true)
+	if p.treeLen() != 1 { // just the db header
+		t.Fatalf("collapsed treeLen = %d, want 1", p.treeLen())
+	}
+	p.SetCollapsed(false)
+	if p.treeLen() != 2 {
+		t.Fatalf("restored treeLen = %d, want 2", p.treeLen())
 	}
 }

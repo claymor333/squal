@@ -10,8 +10,9 @@ import (
 
 // mouseModel returns a model with one connection, a 10-row results grid, and a
 // fixed 80x30 window so layout hit-testing is deterministic. For that window
-// with focus=results: tabs 0, schema 1..8, editor 9, results 10..27, ai 28,
-// status 29; data row r is at Y = 13+r.
+// with focus=results: schema is the left column (rows 1..28, width 20),
+// results start at (20, 2) with height 26; data row r is at Y = 5+r.
+// Clicking the right column means X >= 20.
 func mouseModel(t *testing.T) *model {
 	t.Helper()
 	m := newModelForTest(1)
@@ -35,7 +36,7 @@ func TestMouseClickFocusesSchema(t *testing.T) {
 
 func TestMouseClickSelectsResultsRow(t *testing.T) {
 	m := mouseModel(t)
-	m.handleMouse(tea.MouseMsg{X: 5, Y: 16, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m.handleMouse(tea.MouseMsg{X: 40, Y: 8, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if m.focus != focusResults {
 		t.Fatalf("focus = %v, want results", m.focus)
 	}
@@ -47,16 +48,16 @@ func TestMouseClickSelectsResultsRow(t *testing.T) {
 func TestMouseWheelScrollsResults(t *testing.T) {
 	m := mouseModel(t)
 	cur := m.conns[0]
-	m.handleMouse(tea.MouseMsg{X: 5, Y: 15, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	m.handleMouse(tea.MouseMsg{X: 40, Y: 15, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
 	if cur.results.top != 0 {
 		t.Fatalf("wheel up at top: top = %d, want 0", cur.results.top)
 	}
 	cur.results.top = 10
-	m.handleMouse(tea.MouseMsg{X: 5, Y: 15, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	m.handleMouse(tea.MouseMsg{X: 40, Y: 15, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
 	if cur.results.top != 9 {
 		t.Fatalf("wheel up: top = %d, want 9", cur.results.top)
 	}
-	m.handleMouse(tea.MouseMsg{X: 5, Y: 15, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	m.handleMouse(tea.MouseMsg{X: 40, Y: 15, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
 	if cur.results.top != 10 {
 		t.Fatalf("wheel down: top = %d, want 10", cur.results.top)
 	}
