@@ -29,6 +29,10 @@ func (m *model) handleMouse(msg tea.MouseMsg) {
 				}
 			case tea.MouseButtonWheelDown:
 				cur.results.top++
+			case tea.MouseButtonWheelLeft:
+				cur.results.moveCol(-1)
+			case tea.MouseButtonWheelRight:
+				cur.results.moveCol(1)
 			}
 		}
 		return

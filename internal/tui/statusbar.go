@@ -62,7 +62,7 @@ func statusView(s statusInfo) string {
 	case focusEditor:
 		keys = "type · alt+enter run · ↑↓←→ move · ctrl+p/n history · tab focus"
 	case focusResults:
-		keys = "↑↓ move · ←→ col · alt+s sort · alt+f filter · alt+n next · pgup/pgdn ring · tab focus"
+		keys = "↑↓ move · ←→ scroll cols · alt+s sort · alt+f filter · alt+n next · pgup/pgdn ring · tab focus"
 	case focusRow:
 		keys = "↑↓ field · enter edit · alt+r raw · alt+s save · alt+1/2/3 tab"
 	case focusHistory:

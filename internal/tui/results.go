@@ -17,6 +17,8 @@ type resultsView struct {
 	sortCol    int   // -1 = no sort
 	sortAsc    bool
 	selCol     int // column cursor (header highlight)
+	xOff       int // first visible column (horizontal window)
+	visCols    int // columns visible without horizontal scrolling
 	filter     string
 	filterMode bool
 	top        int // first visible row index into order
@@ -36,7 +38,7 @@ func newResultsView(data *db.Columnar) *resultsView {
 	styles.Selected = styles.Selected.Background(lipgloss.Color("236")).Foreground(lipgloss.Color("39"))
 	styles.Cell = styles.Cell.Padding(0, 0)
 	tbl.SetStyles(styles)
-	r := &resultsView{data: data, sortCol: -1, sortAsc: true, selCol: 0, viewport: 8, tbl: tbl}
+	r := &resultsView{data: data, sortCol: -1, sortAsc: true, selCol: 0, visCols: 1, viewport: 8, tbl: tbl}
 	for i := 0; i < data.Rows; i++ {
 		r.order = append(r.order, i)
 	}
@@ -51,7 +53,8 @@ func (r *resultsView) SetViewport(h int) {
 	}
 }
 
-// moveCol steps the column cursor, clamped to the header range.
+// moveCol steps the column cursor and slides the horizontal window so the
+// cursor stays visible — the vertical analog of scrollResults.
 func (r *resultsView) moveCol(d int) {
 	if r.data == nil || len(r.data.Columns) == 0 {
 		return
@@ -63,6 +66,28 @@ func (r *resultsView) moveCol(d int) {
 	if r.selCol > len(r.data.Columns)-1 {
 		r.selCol = len(r.data.Columns) - 1
 	}
+	if r.selCol < r.xOff {
+		r.xOff = r.selCol
+	}
+	if r.visCols > 0 && r.selCol >= r.xOff+r.visCols {
+		r.xOff = r.selCol - r.visCols + 1
+	}
+	if r.xOff < 0 {
+		r.xOff = 0
+	}
+}
+
+// colWindow returns the half-open column range currently visible.
+func (r *resultsView) colWindow() (start, end int) {
+	if r.visCols < 1 {
+		r.visCols = 1
+	}
+	start = r.xOff
+	end = start + r.visCols
+	if end > len(r.data.Columns) {
+		end = len(r.data.Columns)
+	}
+	return start, end
 }
 
 // sortCursor sorts by the cursor column, toggling direction if already sorted
@@ -130,29 +155,39 @@ func (r *resultsView) view(w int) string {
 		return styleDim.Render("(no rows)")
 	}
 
+	// Horizontal window: a fixed column width so wide tables pan instead of
+	// squeezing every column to a couple of characters.
+	const colWidth = 16
 	ncols := len(r.data.Columns)
-	cellW := (w - 2 - (ncols-1)*3) / ncols
-	if cellW < 1 {
-		cellW = 1
+	r.visCols = (w - 2) / colWidth
+	if r.visCols < 1 {
+		r.visCols = 1
 	}
-	if cellW > 64 {
-		cellW = 64
+	if r.visCols > ncols {
+		r.visCols = ncols
 	}
+	if r.xOff > ncols-r.visCols {
+		r.xOff = ncols - r.visCols
+	}
+	if r.xOff < 0 {
+		r.xOff = 0
+	}
+	cStart, cEnd := r.colWindow()
 
-	cols := make([]table.Column, ncols)
-	for c, name := range r.data.Columns {
-		title := name
-		if r.sortCol == c {
+	cols := make([]table.Column, cEnd-cStart)
+	for i, c := cStart, 0; i < cEnd; i, c = i+1, c+1 {
+		title := r.data.Columns[i]
+		if r.sortCol == i {
 			if r.sortAsc {
 				title += " ▲"
 			} else {
 				title += " ▼"
 			}
 		}
-		if c == r.selCol {
+		if i == r.selCol {
 			title = styleAccent.Render("▸ " + title)
 		}
-		cols[c] = table.Column{Title: title, Width: cellW}
+		cols[c] = table.Column{Title: title, Width: colWidth}
 	}
 
 	end := r.top + r.viewport
@@ -160,12 +195,12 @@ func (r *resultsView) view(w int) string {
 		end = len(r.order)
 	}
 	rows := make([]table.Row, 0, end-r.top)
-	for i := r.top; i < end; i++ {
-		row := make(table.Row, ncols)
-		for c := range ncols {
-			row[c] = truncate(r.data.Value(c, r.order[i]), cellW)
+	for row := r.top; row < end; row++ {
+		line := make(table.Row, cEnd-cStart)
+		for i, c := cStart, 0; i < cEnd; i, c = i+1, c+1 {
+			line[c] = truncate(r.data.Value(i, r.order[row]), colWidth)
 		}
-		rows = append(rows, row)
+		rows = append(rows, line)
 	}
 
 	r.tbl.SetColumns(cols)
@@ -180,6 +215,9 @@ func (r *resultsView) view(w int) string {
 	var b strings.Builder
 	if r.filterMode || r.filter != "" {
 		fmt.Fprintf(&b, "[filter: %s▌]\n", r.filter)
+	}
+	if cEnd-cStart < ncols {
+		fmt.Fprintf(&b, "[cols %d-%d of %d]\n", cStart+1, cEnd, ncols)
 	}
 	b.WriteString(r.tbl.View())
 	return b.String()

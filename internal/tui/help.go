@@ -26,7 +26,7 @@ var (
 	}
 	bindResults = []key.Binding{
 		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move row")),
-		key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←→", "column")),
+		key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←→", "scroll columns")),
 		key.NewBinding(key.WithKeys("alt+s"), key.WithHelp("alt+s", "sort column")),
 		key.NewBinding(key.WithKeys("alt+f"), key.WithHelp("alt+f", "filter")),
 		key.NewBinding(key.WithKeys("alt+n"), key.WithHelp("alt+n", "next page")),

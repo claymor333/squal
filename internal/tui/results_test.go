@@ -88,6 +88,56 @@ func TestResultsViewHighlightsCursorColumn(t *testing.T) {
 	}
 }
 
+// wideCols is a 10-column single-row fixture for horizontal-window tests.
+func wideCols() *db.Columnar {
+	cols := make([]string, 10)
+	rows := make([][]string, 10)
+	for i := range cols {
+		cols[i] = fmt.Sprintf("c%d", i)
+		rows[i] = []string{fmt.Sprintf("v%d", i)}
+	}
+	return &db.Columnar{Columns: cols, Cols: rows, Rows: 1}
+}
+
+func TestResultsMoveColScrollsWindow(t *testing.T) {
+	r := newResultsView(wideCols())
+	r.visCols = 4
+	for i := 0; i < 2; i++ {
+		r.moveCol(1)
+	}
+	if r.xOff != 0 || r.selCol != 2 {
+		t.Fatalf("before edge: xOff=%d selCol=%d, want 0/2", r.xOff, r.selCol)
+	}
+	r.moveCol(1) // selCol 3, still in window
+	r.moveCol(1) // selCol 4 -> window slides
+	if r.xOff != 1 || r.selCol != 4 {
+		t.Fatalf("after slide: xOff=%d selCol=%d, want 1/4", r.xOff, r.selCol)
+	}
+	for i := 0; i < 4; i++ {
+		r.moveCol(-1) // back to 0; window slides left when selCol exits
+	}
+	if r.xOff != 0 || r.selCol != 0 {
+		t.Fatalf("after left slide: xOff=%d selCol=%d, want 0/0", r.xOff, r.selCol)
+	}
+}
+
+func TestResultsViewHorizontalWindow(t *testing.T) {
+	r := newResultsView(wideCols())
+	out := r.view(80) // visCols = 78/16 = 4
+	if !strings.Contains(out, "[cols 1-4 of 10]") {
+		t.Fatalf("cols indicator missing: %q", out)
+	}
+	if !strings.Contains(out, "c0") || strings.Contains(out, "c5") {
+		t.Fatalf("only the visible window should render: %q", out)
+	}
+	// pan right: selCol=8 slides the window minimally to [5,9) -> cols 6-9
+	r.moveCol(8)
+	out = r.view(80)
+	if !strings.Contains(out, "[cols 6-9 of 10]") {
+		t.Fatalf("panned indicator wrong: %q", out)
+	}
+}
+
 func TestResultsViewTruncatesToWidth(t *testing.T) {
 	r := newResultsView(&db.Columnar{
 		Columns: []string{"big"},
