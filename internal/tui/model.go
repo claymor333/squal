@@ -1297,17 +1297,53 @@ func (m *model) View() string {
 
 	base := out.String()
 	if m.help {
-		box := renderHelp(m.focus, m.width, m.height)
-		pad := (m.height - lineCount(box)) / 2
-		if pad > 0 {
-			return strings.Repeat("\n", pad) + box + "\n"
-		}
-		return box + "\n"
+		// a popup over the live frame, not a full-screen replacement
+		base = overlayPopup(base, renderHelp(m.focus, m.width, m.height), m.width, m.height)
 	}
 	if m.connect != nil {
 		return renderConnectModal(m.connect) + "\n" + base
 	}
 	return base
+}
+
+// overlayPopup centers a bordered popup on top of the base frame. Whole lines
+// in the popup's vertical band are replaced, so ANSI escapes are never split by
+// a horizontal cut; the band outside the popup is blank (a scrim).
+func overlayPopup(base, popup string, w, h int) string {
+	baseLines := strings.Split(base, "\n")
+	for len(baseLines) < h {
+		baseLines = append(baseLines, "")
+	}
+	popLines := strings.Split(popup, "\n")
+	ph := len(popLines)
+	pw := 0
+	for _, l := range popLines {
+		if lw := lipgloss.Width(l); lw > pw {
+			pw = lw
+		}
+	}
+	if pw > w {
+		pw = w
+	}
+	ptop := (h - ph) / 2
+	if ptop < 0 {
+		ptop = 0
+	}
+	xpad := (w - pw) / 2
+	if xpad < 0 {
+		xpad = 0
+	}
+	for i, line := range popLines {
+		if ptop+i >= h {
+			break
+		}
+		row := strings.Repeat(" ", xpad) + line
+		if lw := lipgloss.Width(row); lw < w {
+			row += strings.Repeat(" ", w-lw)
+		}
+		baseLines[ptop+i] = row
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 // railBox renders the context rail: a tab strip (row | hist | ai) over the

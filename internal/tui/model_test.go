@@ -241,17 +241,23 @@ func TestQuestionMarkTypesInEditor(t *testing.T) {
 	}
 }
 
-// TestF1OpensHelp covers the F1 help binding and the overlay render.
+// TestF1OpensHelp covers the F1 help binding; the help is a popup over the live
+// frame, not a full-screen replacement.
 func TestF1OpensHelp(t *testing.T) {
 	m := newModelForTest(1)
-	m.width, m.height = 80, 30
+	m.width, m.height = 100, 26
+	m.conns[0].pane = newSchemaPane([]db.Database{{Name: "app"}})
 	m.focus = focusSchema
 	m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
 	if !m.help {
 		t.Fatal("F1 should open the help overlay")
 	}
-	if !strings.Contains(m.View(), "keys") {
-		t.Fatal("help overlay should render")
+	out := m.View()
+	if !strings.Contains(out, "keys") {
+		t.Fatal("help popup should render")
+	}
+	if !strings.Contains(out, "▸ schema") {
+		t.Fatal("the base frame should stay visible behind the popup")
 	}
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
 	if m.help {

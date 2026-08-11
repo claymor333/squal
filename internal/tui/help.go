@@ -76,14 +76,12 @@ func renderHelp(focus paneFocus, w, h int) string {
 	if innerH < 1 {
 		innerH = 1
 	}
-	// clip first: lipgloss Width pads but never truncates, so the box would
-	// grow if the help rows were wider than the window.
+	// clip first so a tiny window never overflows; the box keeps its natural
+	// content width so overlayPopup can center it as a popup.
 	content = clip(content, innerW, innerH)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styleAccent.GetForeground()).
-		Width(innerW).
-		Height(innerH).
 		Render(styleTitle.Render(" keys — "+focusedName(focus)) + "\n" + content)
 }
 
